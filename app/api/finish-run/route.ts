@@ -1,87 +1,162 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createWalletClient, http, publicActions, defineChain } from 'viem'; // Adicione defineChain
-import { privateKeyToAccount } from 'viem/accounts';
+// app/api/finish-run/route.ts
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { createWalletClient, createPublicClient, http, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
-// Defina a chain custom para Monad Testnet (não existe pré-definida no viem)
-const monadTestnet = defineChain({
-  id: 10143,
-  name: 'Monad Testnet',
-  nativeCurrency: {
-    name: 'Monad',
-    symbol: 'MON',
-    decimals: 18,
-  },
-  rpcUrls: {
-    default: { http: ['https://testnet-rpc.monad.xyz'] }, // RPC correto
-  },
-  blockExplorers: {
-    default: { name: 'Monad Explorer', url: 'https://testnet.monadexplorer.com' },
-  },
-  testnet: true,
-});
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const CONTRACT_ADDRESS = '0xceCBFF203C8B6044F52CE23D914A1bfD997541A4' as const;
+// —— cache simples em memória para idempotência (por instância) ——
+const recentRuns: Set<string> =
+  (globalThis as any).__recentRuns ?? new Set<string>();
+(globalThis as any).__recentRuns = recentRuns;
 
-// ABI completo do contrato (copie do explorer: https://testnet.monadexplorer.com/address/0xceCBFF203C8B6044F52CE23D914A1bfD997541A4?tab=Contract)
-// Abaixo, um exemplo mínimo; substitua pelo ABI full para evitar erros
+// ABI mínima do contrato
 const ABI = [
   {
-    "inputs": [
-      { "internalType": "address", "name": "_game", "type": "address" },
-      { "internalType": "string", "name": "_name", "type": "string" },
-      { "internalType": "string", "name": "_image", "type": "string" },
-      { "internalType": "string", "name": "_url", "type": "string" }
+    type: "function",
+    name: "updatePlayerData",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "player", type: "address" },
+      { name: "scoreAmount", type: "uint256" },
+      { name: "transactionAmount", type: "uint256" },
     ],
-    "name": "registerGame",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    outputs: [],
   },
-  {
-    "inputs": [
-      { "internalType": "address", "name": "player", "type": "address" },
-      { "internalType": "uint256", "name": "scoreAmount", "type": "uint256" },
-      { "internalType": "uint256", "name": "transactionAmount", "type": "uint256" }
-    ],
-    "name": "updatePlayerData",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  // Adicione o resto do ABI aqui (funções como getGame, getPlayerData, etc.)
 ] as const;
 
-// Private key da wallet registrada como _game (guarde em .env.local e Vercel env vars)
-const GAME_PRIVATE_KEY = process.env.GAME_PRIVATE_KEY as `0x${string}`;
+// Serializa BigInt em JSON
+function bigintReplacer(_k: string, v: any) {
+  return typeof v === "bigint" ? v.toString() : v;
+}
+
+function getEnvSafe() {
+  const contract = (process.env.MONAD_GAMES_ID_ADDRESS ?? "").trim();
+  const rpcUrl = (process.env.MONAD_RPC_URL ?? "").trim();
+  const chainIdStr = (process.env.MONAD_CHAIN_ID ?? "").trim();
+  let pk = (process.env.ADMIN_PRIVATE_KEY ?? "").trim();
+
+  // normaliza private key
+  pk = pk.replace(/^['"]|['"]$/g, "");
+  if (pk && !pk.startsWith("0x")) pk = `0x${pk}`;
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(pk))
+    throw new Error("ADMIN_PRIVATE_KEY inválida (formato 0x + 64 hex).");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(contract))
+    throw new Error("MONAD_GAMES_ID_ADDRESS inválido (0x + 40 hex).");
+
+  const chainId = Number(chainIdStr);
+  if (!rpcUrl || !chainId)
+    throw new Error("MONAD_RPC_URL / MONAD_CHAIN_ID ausentes.");
+
+  // confirmações mínimas antes de responder
+  const confirmations = Math.max(1, Number(process.env.REQUIRED_CONFIRMATIONS || "1"));
+
+  // fator para “reduzir” score enviado (MVP). Padrão 0.5 (metade)
+  const SCORE_SEND_FACTOR = Number(process.env.SCORE_SEND_FACTOR || "0.5");
+  const scoreFactor =
+    Number.isFinite(SCORE_SEND_FACTOR) && SCORE_SEND_FACTOR > 0
+      ? SCORE_SEND_FACTOR
+      : 1;
+
+  const chain = {
+    id: chainId,
+    name: "Monad Testnet",
+    nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
+    rpcUrls: { default: { http: [rpcUrl] } },
+  };
+
+  return {
+    contract: contract as `0x${string}`,
+    rpcUrl,
+    chain,
+    pk: pk as Hex,
+    confirmations,
+    scoreFactor,
+  };
+}
+
+function extractWallet(body: any): `0x${string}` | null {
+  const cand =
+    typeof body?.wallet === "string"
+      ? body.wallet
+      : typeof body?.wallet?.address === "string"
+      ? body.wallet.address
+      : "";
+  const s = String(cand || "").trim();
+  return /^0x[0-9a-fA-F]{40}$/.test(s) ? (s as `0x${string}`) : null;
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const { sessionId, scoreDelta, txDelta, wallet } = await req.json();
+    const body = await req.json();
 
-    // Validações (adicione mais se necessário, ex: validar wallet como endereço válido)
-    if (!wallet || scoreDelta == null || txDelta == null || !GAME_PRIVATE_KEY) {
-      return NextResponse.json({ error: 'Dados inválidos ou configuração ausente' }, { status: 400 });
-    }
+    // —— Idempotência (runId no header ou body) ——
+    const runId =
+      String(req.headers.get("x-idempotency-key") || body?.runId || "").trim();
+    if (!runId)
+      return NextResponse.json({ ok: false, error: "runId ausente" }, { status: 400 });
+    if (recentRuns.has(runId))
+      return NextResponse.json(
+        { ok: false, error: "Requisição duplicada (idempotência)" },
+        { status: 409 },
+      );
+    recentRuns.add(runId);
+    setTimeout(() => recentRuns.delete(runId), 2 * 60 * 1000).unref?.();
 
-    const account = privateKeyToAccount(GAME_PRIVATE_KEY);
-    const client = createWalletClient({
-      account,
-      chain: monadTestnet,
-      transport: http(),
-    }).extend(publicActions);
+    // —— Validações do payload ——
+    const wallet = extractWallet(body);
+    const scoreDelta = Number(body?.scoreDelta ?? 0);
+    const txDeltaRaw = Number(body?.txDelta ?? 0);
+    const txDelta = Number.isFinite(txDeltaRaw) && txDeltaRaw > 0 ? txDeltaRaw : 0;
 
-    const { request } = await client.simulateContract({
-      address: CONTRACT_ADDRESS,
-      abi: ABI,
-      functionName: 'updatePlayerData',
-      args: [wallet, BigInt(scoreDelta), BigInt(txDelta)],
+    if (!wallet)
+      return NextResponse.json({ ok: false, error: "wallet inválida" }, { status: 400 });
+    if (!Number.isFinite(scoreDelta) || scoreDelta <= 0)
+      return NextResponse.json({ ok: false, error: "scoreDelta inválido (> 0)" }, { status: 400 });
+
+    const { contract, rpcUrl, chain, pk, confirmations, scoreFactor } = getEnvSafe();
+
+    // 🔧 MVP: aplica fator no score que será enviado (ex.: 0.5 = metade), arredonda p/ baixo, mínimo 1
+    const scaledScoreDelta = Math.max(1, Math.floor(scoreDelta * scoreFactor));
+
+    // —— Envia transação ——
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+
+    const hash = await walletClient.writeContract({
+      address: contract,
+      abi: ABI as any,
+      functionName: "updatePlayerData",
+      args: [wallet, BigInt(scaledScoreDelta), BigInt(txDelta)],
     });
 
-    const txHash = await client.writeContract(request);
+    // Espera confirmação antes de responder
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations });
 
-    return NextResponse.json({ ok: true, txHash });
-  } catch (error) {
-    console.error('Erro ao submeter:', error);
-    return NextResponse.json({ error: 'Falha ao submeter on-chain: ' + (error as Error).message }, { status: 500 });
+    const payload = {
+      ok: true,
+      confirmed: true,
+      confirmations,
+      txHash: hash,
+      sent: {
+        scoreDelta: scaledScoreDelta, // o que foi efetivamente enviado
+        txDelta,
+      },
+      receipt: {
+        blockNumber: receipt.blockNumber?.toString(),
+        status: (receipt as any).status ?? null,
+      },
+    };
+
+    return new NextResponse(JSON.stringify(payload, bigintReplacer), {
+      headers: { "content-type": "application/json" },
+      status: 200,
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }
 }
