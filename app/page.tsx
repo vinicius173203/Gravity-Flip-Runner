@@ -135,7 +135,7 @@ export default function Home() {
 
   return (
     <main className="min-h-dvh flex flex-col items-center gap-6 p-6">
-      <h1 className="text-3xl font-bold">Gravity Flip Runner — M7</h1>
+      <h1 className="text-3xl font-bold">Gravity Runner</h1>
 
       {!authenticated ? (
         <button
@@ -149,7 +149,7 @@ export default function Home() {
         <div className="flex items-center gap-3">
           <span className="text-sm opacity-70">
             {wallet ? `Wallet: ${short(wallet)}` : "Conectando…"}
-            {username ? ` · MONA ID: ${username}` : ""}
+            {username ? ` · MONAD ID: ${username}` : ""}
           </span>
           <button onClick={() => logout()} className="px-3 py-2 bg-zinc-800 rounded">
             Sair
