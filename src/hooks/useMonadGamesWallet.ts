@@ -2,35 +2,32 @@
 import { useEffect, useState } from "react";
 import { usePrivy, CrossAppAccountWithMetadata } from "@privy-io/react-auth";
 
-const CROSS_APP_ID = "cmd8euall0037le0my79qpz42"; // Monad Games ID (Cross App ID)
+const CROSS_APP_ID = "cmd8euall0037le0my79qpz42"; // Monad Games ID
 
 export function useMonadGamesWallet() {
-  const { authenticated, ready, user } = usePrivy();
-  const [address, setAddress] = useState<string | null>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "ok" | "missing">("idle");
+  const { authenticated, user, ready } = usePrivy();
+  const [accountAddress, setAccountAddress] = useState<string | null>(null);
 
   useEffect(() => {
-    // reset em mudanças de sessão
-    setAddress(null);
-    if (!ready) { setStatus("loading"); return; }
-    if (!authenticated || !user) { setStatus("idle"); return; }
+    setAccountAddress(null);
+    if (!(authenticated && user && ready)) return;
 
-    const accounts = user.linkedAccounts ?? [];
-    const cross = accounts.find(
-      (acc): acc is CrossAppAccountWithMetadata =>
-        acc.type === "cross_app" && (acc as any).providerApp?.id === CROSS_APP_ID
-    );
+    // === EXATAMENTE COMO NO GUIA (filter(...)[0]) ===
+    const linked = user.linkedAccounts ?? [];
+    if (linked.length > 0) {
+      const crossAppAccount: CrossAppAccountWithMetadata =
+        linked.filter(
+          (account) =>
+            account.type === "cross_app" &&
+            (account as any).providerApp?.id === CROSS_APP_ID
+        )[0] as CrossAppAccountWithMetadata;
 
-    if (!cross) { setStatus("missing"); return; }
-
-    const embedded = cross.embeddedWallets ?? [];
-    if (embedded.length > 0 && embedded[0]?.address) {
-      setAddress(embedded[0].address);
-      setStatus("ok");
-    } else {
-      setStatus("missing");
+      // The first embedded wallet created using Monad Games ID, is the wallet address
+      if (crossAppAccount?.embeddedWallets?.length > 0) {
+        setAccountAddress(crossAppAccount.embeddedWallets[0].address);
+      }
     }
-  }, [authenticated, ready, user]);
+  }, [authenticated, user, ready]);
 
-  return { address, status }; // status: idle/loading/ok/missing
+  return accountAddress; // string ou null
 }
