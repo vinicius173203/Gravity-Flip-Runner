@@ -235,8 +235,8 @@ export default function Home() {
               />
 
               {/* ==== OVERLAY (avatar + stats + high score) ==== */}
-              <div className="pointer-events-none absolute left-3 top-3 right-3 flex flex-col sm:flex-row sm:items-center gap-3">
-                <div className="pointer-events-auto flex items-center gap-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 p-3 shadow-lg">
+              <div className="pointer-events-none absolute left-3 top-3 right-3 hidden sm:flex sm:flex-row sm:items-center gap-3">
+  <div className="pointer-events-auto flex items-center gap-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 p-3 shadow-lg">
                   <img
                     src={"/images/player.png"}
                     alt="avatar"
@@ -248,18 +248,51 @@ export default function Home() {
                       {username || "Player"}
                     </div>
                   </div>
+                  {/* HUD compacto para mobile (fica fora do canvas) */}
+<div className="sm:hidden mt-2">
+  <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 p-3">
+    <div className="flex items-center gap-3">
+      <img
+        src={"/images/player.png"}
+        alt="avatar"
+        className="h-8 w-8 rounded-lg object-cover ring-2 ring-white/20"
+      />
+      <div className="leading-tight">
+        <div className="text-sm font-semibold text-white">{username || "Player"}</div>
+        {/* opcional: carteira curta */}
+        {/* <div className="text-[10px] text-white/70">{shorten(wallet ?? "")}</div> */}
+      </div>
+    </div>
+
+    <div className="flex items-center gap-4 text-white">
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wider text-white/70">Pts</div>
+        <div className="text-base font-semibold">{currentScore}</div>
+      </div>
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wider text-white/70">Vel</div>
+        <div className="text-base font-semibold">{Math.round(currentSpeed)} px/s</div>
+      </div>
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wider text-white/70">HS</div>
+        <div className="text-base font-bold text-yellow-300">{highScore}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 
                   {/* Valores simples */}
                   <div className="flex items-center gap-4 text-white">
                     <div className="text-right">
                       <div className="text-[10px] uppercase tracking-wider text-white/70">
-                        Pontuação
+                        Score
                       </div>
                       <div className="text-base font-semibold">{currentScore}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-[10px] uppercase tracking-wider text-white/70">
-                        Velocidade
+                        Speed
                       </div>
                       <div className="text-base font-semibold">
                         {Math.round(currentSpeed)} px/s
