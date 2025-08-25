@@ -5,8 +5,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 /** ====== CONFIG ====== */
 
 /** Velocidade (ajuste ao gosto) */
-const SPEED_START = 220; // px/s inicial
-const SPEED_ADD = 30;    // +px/s por obstáculo DESVIADO
+const SPEED_START = 225; // px/s inicial
+const SPEED_ADD = 25;    // +px/s por obstáculo DESVIADO
 const SPEED_MAX = 5000;
 
 /** Canvas base (o canvas renderiza nesses "px lógicos" e é escalado via CSS) */
