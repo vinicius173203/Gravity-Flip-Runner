@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 /** Velocidade (ajuste ao gosto) */
 const SPEED_START = 225; // px/s inicial
-const SPEED_ADD = 25;    // +px/s por obstáculo DESVIADO
+const SPEED_ADD = 25; // +px/s por obstáculo DESVIADO
 const SPEED_MAX = 5000;
 
 /** Canvas base (o canvas renderiza nesses "px lógicos" e é escalado via CSS) */
@@ -31,8 +31,8 @@ const SPAWN_MAX = 800; // px
 /** Assets (ajuste as extensões conforme seus arquivos) */
 const PLAYER_SRC = "/images/player.png"; // troque se for .jpg
 const HYDRANT_GREEN_SRC = "/images/h1.png";
-const HYDRANT_RED_SRC   = "/images/h2.png";
-const HYDRANT_BLUE_SRC  = "/images/h3.png";
+const HYDRANT_RED_SRC = "/images/h2.png";
+const HYDRANT_BLUE_SRC = "/images/h3.png";
 
 /** Backgrounds em sequência (ordem = progressão) */
 const BG_SRCS = [
@@ -65,10 +65,10 @@ const MUSIC = {
 } as const;
 
 const MUSIC_EXPLORATION_MAX = 20; // score <= 20 → exploração
-const MUSIC_BATTLE_MAX = 40;      // 21..49 → batalha
+const MUSIC_BATTLE_MAX = 40; // 21..49 → batalha
 // >= 50 → boss
 
-const MUSIC_FADE_SECS = 0.8;      // fade entre faixas
+const MUSIC_FADE_SECS = 0.8; // fade entre faixas
 const MUSIC_DEFAULT_VOL = 0.6;
 
 /** ====== TIPOS ====== */
@@ -86,18 +86,19 @@ type Obstacle = {
 type GameCanvasProps = {
   onGameOver: (score: number) => void;
   playerScale?: number;
-  onStatsChange?: (s: { score: number; speed: number }) => void; // <<< NOVO
+  onStatsChange?: (s: { score: number; speed: number }) => void;
 };
 
 export default function GameCanvas({
   onGameOver,
   playerScale = 1.6,
-  onStatsChange, // <<< NOVO
+  onStatsChange,
 }: GameCanvasProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // HUD
+  // HUD (apenas flags/estado; não renderizamos overlays)
   const [gameOver, setGameOver] = useState(false);
 
   // ===== estado do jogo em refs =====
@@ -120,9 +121,9 @@ export default function GameCanvas({
 
   // parallax + tema
   const bgOffRef = useRef(0);
-  const bgIdxRef = useRef(0);         // tema atual
-  const bgPrevIdxRef = useRef(0);     // tema anterior (p/ fade)
-  const bgFadeTRef = useRef(1);       // 0..1 (1=sem transição)
+  const bgIdxRef = useRef(0); // tema atual
+  const bgPrevIdxRef = useRef(0); // tema anterior (p/ fade)
+  const bgFadeTRef = useRef(1); // 0..1 (1=sem transição)
 
   // ===== áudio =====
   const explorationMusicRef = useRef<HTMLAudioElement | null>(null);
@@ -130,6 +131,7 @@ export default function GameCanvas({
   const bossMusicRef = useRef<HTMLAudioElement | null>(null);
   const currentMusicRef = useRef<MusicKind | null>(null);
   const audioUnlockedRef = useRef(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   // ==== medidas do player derivadas da escala ====
   const PLAYER_W = Math.round(PLAYER_BASE * playerScale);
@@ -153,10 +155,9 @@ export default function GameCanvas({
     bgFadeTRef.current = 1;
 
     setGameOver(false);
-    // notifica o overlay já no reset
-  if (typeof onStatsChange === "function") {
-    onStatsChange({ score: 0, speed: SPEED_START });
-  }
+    if (typeof onStatsChange === "function") {
+      onStatsChange({ score: 0, speed: SPEED_START });
+    }
   };
 
   // input: flip de pista
@@ -212,31 +213,63 @@ export default function GameCanvas({
 
   /** ===== carregar áudio ===== */
   useEffect(() => {
+    // WebAudio para aumentar as chances de autoplay em mobile
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const ctx: AudioContext | null = Ctx ? new Ctx() : null;
+    if (ctx) audioCtxRef.current = ctx;
+
     explorationMusicRef.current = new Audio(MUSIC.exploration);
     battleMusicRef.current = new Audio(MUSIC.battle);
     bossMusicRef.current = new Audio(MUSIC.boss);
 
-    [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach(a => {
+    [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach((a) => {
       if (!a) return;
       a.loop = true;
       a.volume = 0; // começa mudo (vamos fazer fade-in)
+      // Conecta ao WebAudio (melhora compatibilidade iOS)
+      try {
+        if (ctx) {
+          const source = (ctx as any).createMediaElementSource(a);
+          source.connect(ctx.destination);
+        }
+      } catch {}
     });
 
-    // desbloqueia áudio na 1ª interação do usuário
-    const unlockAudio = () => {
+    // Tenta iniciar o áudio assim que o game começar (desktop costuma permitir)
+    const tryAutoStart = async () => {
+      try {
+        if (ctx && ctx.state === "suspended") await ctx.resume();
+        audioUnlockedRef.current = true;
+        crossfadeTo("exploration");
+      } catch {
+        // se falhar, aguardamos interação do usuário
+      }
+    };
+
+    // Autotentativa no mount
+    tryAutoStart();
+
+    // Desbloqueia áudio na 1ª interação do usuário
+    const unlockAudio = async () => {
+      try {
+        if (ctx && ctx.state === "suspended") await ctx.resume();
+      } catch {}
       audioUnlockedRef.current = true;
-      // inicia com exploração
       crossfadeTo("exploration");
       window.removeEventListener("pointerdown", unlockAudio);
       window.removeEventListener("keydown", unlockAudio);
     };
+
     window.addEventListener("pointerdown", unlockAudio);
     window.addEventListener("keydown", unlockAudio);
 
     return () => {
       window.removeEventListener("pointerdown", unlockAudio);
       window.removeEventListener("keydown", unlockAudio);
-      [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach(a => a?.pause());
+      [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach((a) => a?.pause());
+      try {
+        ctx?.close();
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -270,7 +303,7 @@ export default function GameCanvas({
     if (!target) return;
 
     // fade out das outras
-    (Object.keys(map) as MusicKind[]).forEach(k => {
+    (Object.keys(map) as MusicKind[]).forEach((k) => {
       const el = map[k];
       if (!el) return;
       if (k === kind) return;
@@ -412,13 +445,14 @@ export default function GameCanvas({
     if (bgFadeTRef.current < 1) {
       bgFadeTRef.current = Math.min(1, bgFadeTRef.current + dt / BG_FADE_SECS);
     }
-    // Atualiza o overlay a cada frame
-  if (typeof onStatsChange === "function") {
-    onStatsChange({
-      score: scoreRef.current,
-      speed: speedRef.current,
-    });
-  }
+
+    // Atualiza o overlay/telemetria externa a cada frame
+    if (typeof onStatsChange === "function") {
+      onStatsChange({
+        score: scoreRef.current,
+        speed: speedRef.current,
+      });
+    }
   };
 
   // render
@@ -526,7 +560,7 @@ export default function GameCanvas({
 
     // fundo base (A) + crossfade para (B)
     if (imgA && imgA.complete && t < 1) drawCover(imgA, 1 - t);
-    if (imgB && imgB.complete)         drawCover(imgB, t);
+    if (imgB && imgB.complete) drawCover(imgB, t);
     else {
       // fallback
       ctx.fillStyle = "#0b1020";
@@ -551,16 +585,80 @@ export default function GameCanvas({
     };
   }, [flipLane]);
 
+  /** ======== FULLSCREEN + LANDSCAPE ======== */
+  const enterFullscreenAndLandscape = async () => {
+    const cont = containerRef.current as any;
+    if (!cont) return;
+    try {
+      if (cont.requestFullscreen) await cont.requestFullscreen();
+      else if (cont.webkitRequestFullscreen) await cont.webkitRequestFullscreen();
+    } catch {}
+
+    // Tenta travar em paisagem (não funciona em todos os navegadores)
+    try {
+      if ((screen as any).orientation && (screen.orientation as any).lock) {
+        await (screen.orientation as any).lock("landscape");
+      }
+    } catch {
+      // iOS Safari geralmente não permite; seguimos sem travar
+    }
+  };
+
+  const exitFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+    } catch {}
+  };
+
   return (
-    <canvas
-      ref={canvasRef}
-      width={WIDTH}
-      height={HEIGHT}
-      className={`w-full max-w-4xl rounded-2xl border border-white/10 ${
-        gameOver ? "opacity-90" : "opacity-100"
-      }`}
-      style={{ background: "rgba(0,0,0,0.5)" }}
-    />
+    <div
+      ref={containerRef}
+      className="relative w-full max-w-4xl mx-auto"
+      style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }}
+    >
+      {/* Canvas */}
+      <canvas
+        ref={canvasRef}
+        width={WIDTH}
+        height={HEIGHT}
+        className={`w-full h-auto rounded-2xl border border-white/10 ${gameOver ? "opacity-90" : "opacity-100"}`}
+        style={{ background: "rgba(0,0,0,0.5)" }}
+      />
+
+      {/* Toolbar (top-right) */}
+      <div className="absolute top-2 right-2 flex items-center gap-2">
+        <button
+          onClick={enterFullscreenAndLandscape}
+          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+          title="Tela cheia"
+        >
+          ⛶ Tela cheia
+        </button>
+        <button
+          onClick={() => {
+            // Força tocar áudio caso ainda não tenha liberado
+            if (!audioUnlockedRef.current) {
+              try {
+                audioCtxRef.current?.resume();
+              } catch {}
+              audioUnlockedRef.current = true;
+              crossfadeTo("exploration");
+            }
+          }}
+          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+          title="Ativar som"
+        >
+          🔊 Som
+        </button>
+        <button
+          onClick={exitFullscreen}
+          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+          title="Sair da tela cheia"
+        >
+          ↩︎ Sair
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -606,8 +704,8 @@ function drawFlippable(
 }
 
 function spawnObstacle(): Obstacle {
-  const color = (["green", "red", "blue"] as HydrantColor[])[rand(0, 2)];
-  const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
+  const color = (['green', 'red', 'blue'] as HydrantColor[])[rand(0, 2)];
+  const lane: Lane = Math.random() < 0.5 ? 'top' : 'bottom';
   return {
     x: WIDTH + rand(0, 80),
     lane,
