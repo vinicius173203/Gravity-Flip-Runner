@@ -1,34 +1,46 @@
+// /app/api/global-leaderboard/route.ts
 import { NextResponse } from "next/server";
 
 const SOURCE =
   "https://monad-games-id-site.vercel.app/leaderboard?page=1&gameId=72&sortBy=scores";
 const TOP_N = 10;
 
+// ===== Tipos explícitos (corrige o erro de TS) =====
+type Entry = { name: string; score: number; display: string };
+type Payload = { ok: true; source: string; entries: Entry[] };
+
 // === CACHE IN-MEMORY (processo) ===
 const TTL_MS = 60_000;
-let cacheData:
-  | { ok: true; source: string; entries: Array<{ name: string; score: number; display: string }> }
-  | null = null;
+let cacheData: Payload | null = null;
 let cacheExpiresAt = 0;
-let pending: Promise<typeof cacheData> | null = null;
+let pending: Promise<Payload> | null = null;
 
 export async function GET() {
   try {
     const now = Date.now();
-    // 1) hit de cache
+
+    // 1) cache hit
     if (cacheData && now < cacheExpiresAt) {
-      return withCacheHeaders(NextResponse.json({ ...cacheData, cache: { hit: true, age: Math.floor((TTL_MS - (cacheExpiresAt - now)) / 1000) } }));
-    }
-    // 2) requisição já em andamento? aguarda a mesma
-    if (pending) {
-      const data = await pending;
-      return withCacheHeaders(NextResponse.json({ ...(data ?? { ok: false, entries: [] as any }), cache: { hit: true, coalesced: true } }));
+      return withCacheHeaders(
+        NextResponse.json({
+          ...cacheData,
+          cache: { hit: true, age: Math.floor((TTL_MS - (cacheExpiresAt - now)) / 1000) },
+        }),
+      );
     }
 
-    // 3) dispara a busca e guarda em "pending" para dedupe
-    pending = (async () => {
+    // 2) requisição já em andamento? coalesce
+    if (pending) {
+      const data = await pending;
+      return withCacheHeaders(
+        NextResponse.json({ ...data, cache: { hit: true, coalesced: true } }),
+      );
+    }
+
+    // 3) dispara busca e armazena a promise em `pending`
+    pending = (async (): Promise<Payload> => {
       const entries = await fetchAndParse();
-      const payload = { ok: true as const, source: SOURCE, entries };
+      const payload: Payload = { ok: true, source: SOURCE, entries };
       cacheData = payload;
       cacheExpiresAt = Date.now() + TTL_MS;
       return payload;
@@ -40,31 +52,23 @@ export async function GET() {
     return withCacheHeaders(NextResponse.json({ ...data, cache: { hit: false } }));
   } catch (e: any) {
     pending = null;
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "failed" }, { status: 500 });
   }
 }
 
 function withCacheHeaders(resp: NextResponse) {
-  resp.headers.set(
-    "Cache-Control",
-    // CDN (s-maxage) 60s + SWR 5min; browser pode reusar por 30s
-    "public, max-age=30, s-maxage=60, stale-while-revalidate=300"
-  );
+  // CDN 60s + SWR 5min; browser pode reusar 30s
+  resp.headers.set("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
   return resp;
 }
 
 /* =============== core =============== */
 
-async function fetchAndParse() {
+async function fetchAndParse(): Promise<Entry[]> {
   const res = await fetch(SOURCE, {
-    // deixe o fetch cacheável por infra; nós já temos TTL in-memory
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
       Accept: "text/html,application/xhtml+xml",
     },
   });
@@ -88,12 +92,12 @@ async function fetchAndParse() {
   const ths = chosen.match(/<th[\s\S]*?<\/th>/gi) ?? [];
   const headerTexts = ths.map((th) => stripHtml(th).toLowerCase());
   let playerCol = indexOfHeader(headerTexts, ["player", "jogador", "nome"]);
-  let scoreCol  = indexOfHeader(headerTexts, ["score", "pontuação", "scores"]);
+  let scoreCol = indexOfHeader(headerTexts, ["score", "pontuação", "scores"]);
   let walletCol = indexOfHeader(headerTexts, ["wallet", "carteira", "endereço"]);
 
   // 3) linhas
   const rows = chosen.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
-  const entries: { name: string; score: number; display: string }[] = [];
+  const entries: Entry[] = [];
 
   for (const row of rows) {
     const tds = row.match(/<td[\s\S]*?<\/td>/gi);
@@ -101,10 +105,10 @@ async function fetchAndParse() {
 
     // fallback por heurística
     if (walletCol < 0) walletCol = guessWalletCol(tds);
-    if (scoreCol  < 0) scoreCol  = guessScoreCol(tds);
+    if (scoreCol < 0) scoreCol = guessScoreCol(tds);
     if (playerCol < 0) playerCol = guessPlayerCol(tds, walletCol, scoreCol);
 
-    const nameCell  = tds[playerCol];
+    const nameCell = tds[playerCol];
     const scoreCell = tds[scoreCol];
     if (!nameCell || !scoreCell) continue;
 
@@ -113,7 +117,7 @@ async function fetchAndParse() {
 
     const scoreTextRaw = normalizeScoreText(stripHtml(scoreCell)); // "8,582" | "8.584" | "284"
     const score = parseHumanNumber(scoreTextRaw);                   // 8582    | 8584    | 284
-    const display = scoreTextRaw.replace(/,/g, ".");                // exibimos com PONTO como milhar
+    const display = scoreTextRaw.replace(/,/g, ".");                // exibir com . como milhar
 
     if (Number.isFinite(score)) entries.push({ name, score, display });
   }
@@ -200,7 +204,8 @@ function guessScoreCol(tds: string[]) {
   let bestV = -Infinity;
   nums.forEach((v, i) => {
     if (Number.isFinite(v) && v > bestV) {
-      bestV = v; bestI = i;
+      bestV = v;
+      bestI = i;
     }
   });
   return bestI;
@@ -216,7 +221,7 @@ function guessPlayerCol(tds: string[], walletCol: number, scoreCol: number) {
   }
   return 0;
 }
-function bestByName(items: { name: string; score: number; display: string }[]) {
+function bestByName(items: Entry[]) {
   const map = new Map<string, { score: number; display: string }>();
   for (const it of items) {
     const cur = map.get(it.name);
