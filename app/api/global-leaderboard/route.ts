@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 
 const SOURCE =
-  "https://monad-games-id-site.vercel.app/leaderboard?page=1&gameId=72&sortBy=scores";
+  "https://monad-games-id-site.vercel.app/leaderboard?page=1&gameId=89&sortBy=scores";
 const TOP_N = 10;
 
 // ===== Tipos =====
