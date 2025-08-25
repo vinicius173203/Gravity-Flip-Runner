@@ -5,11 +5,11 @@ const SOURCE =
   "https://monad-games-id-site.vercel.app/leaderboard?page=1&gameId=72&sortBy=scores";
 const TOP_N = 10;
 
-// ===== Tipos explícitos (corrige o erro de TS) =====
+// ===== Tipos =====
 type Entry = { name: string; score: number; display: string };
 type Payload = { ok: true; source: string; entries: Entry[] };
 
-// === CACHE IN-MEMORY (processo) ===
+// ===== Cache in-memory =====
 const TTL_MS = 60_000;
 let cacheData: Payload | null = null;
 let cacheExpiresAt = 0;
@@ -19,7 +19,6 @@ export async function GET() {
   try {
     const now = Date.now();
 
-    // 1) cache hit
     if (cacheData && now < cacheExpiresAt) {
       return withCacheHeaders(
         NextResponse.json({
@@ -28,8 +27,6 @@ export async function GET() {
         }),
       );
     }
-
-    // 2) requisição já em andamento? coalesce
     if (pending) {
       const data = await pending;
       return withCacheHeaders(
@@ -37,7 +34,6 @@ export async function GET() {
       );
     }
 
-    // 3) dispara busca e armazena a promise em `pending`
     pending = (async (): Promise<Payload> => {
       const entries = await fetchAndParse();
       const payload: Payload = { ok: true, source: SOURCE, entries };
@@ -57,7 +53,6 @@ export async function GET() {
 }
 
 function withCacheHeaders(resp: NextResponse) {
-  // CDN 60s + SWR 5min; browser pode reusar 30s
   resp.headers.set("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
   return resp;
 }
@@ -75,18 +70,20 @@ async function fetchAndParse(): Promise<Entry[]> {
   if (!res.ok) throw new Error(`Upstream ${res.status}`);
   const html = await res.text();
 
-  // 1) escolha a tabela mais provável
-  const tables = html.match(/<table[\s\S]*?<\/table>/gi) ?? [];
+  // 1) escolhe a tabela mais provável
+  const tables = (html.match(/<table[\s\S]*?<\/table>/gi) ?? []) as string[];
   if (tables.length === 0) throw new Error("Nenhuma <table> no HTML");
 
-  const chosen =
-    tables.find((t) => {
-      const headTxt = (t.match(/<th[\s\S]*?<\/th>/gi) ?? [])
-        .map(stripHtml)
-        .join(" ")
-        .toLowerCase();
-      return /(rank|player|wallet|score|pontua)/.test(headTxt);
-    }) ?? tables[0];
+  // 🔧 Evita "possibly undefined": garantimos que chosen é string
+  let chosen: string = tables[0];
+  const maybe = tables.find((t) => {
+    const headTxt = (t.match(/<th[\s\S]*?<\/th>/gi) ?? [])
+      .map(stripHtml)
+      .join(" ")
+      .toLowerCase();
+    return /(rank|player|wallet|score|pontua)/.test(headTxt);
+  });
+  if (maybe) chosen = maybe;
 
   // 2) índices (se tiver header)
   const ths = chosen.match(/<th[\s\S]*?<\/th>/gi) ?? [];
@@ -108,6 +105,8 @@ async function fetchAndParse(): Promise<Entry[]> {
     if (scoreCol < 0) scoreCol = guessScoreCol(tds);
     if (playerCol < 0) playerCol = guessPlayerCol(tds, walletCol, scoreCol);
 
+    if (playerCol < 0 || scoreCol < 0) continue; // segurança extra
+
     const nameCell = tds[playerCol];
     const scoreCell = tds[scoreCol];
     if (!nameCell || !scoreCell) continue;
@@ -117,7 +116,7 @@ async function fetchAndParse(): Promise<Entry[]> {
 
     const scoreTextRaw = normalizeScoreText(stripHtml(scoreCell)); // "8,582" | "8.584" | "284"
     const score = parseHumanNumber(scoreTextRaw);                   // 8582    | 8584    | 284
-    const display = scoreTextRaw.replace(/,/g, ".");                // exibir com . como milhar
+    const display = scoreTextRaw.replace(/,/g, ".");                // exibir com ponto como milhar
 
     if (Number.isFinite(score)) entries.push({ name, score, display });
   }
@@ -140,7 +139,6 @@ function cleanName(s: string) {
   return s.replace(/\s+/g, " ").trim();
 }
 function normalizeScoreText(s: string) {
-  // limpa espaços (inclui NBSP), mantém sinais/pontos/vírgulas
   return s.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
 }
 function isRankLike(s: string) {
@@ -151,11 +149,10 @@ function indexOfHeader(headers: string[], needles: string[]) {
 }
 
 /**
- * Converte texto “humano” em número:
+ * Converte texto em número entendendo milhar/decimal:
  * - '.' e ',' presentes → o ÚLTIMO separador é decimal.
  * - só ',' → se grupos de 3 dígitos → MILHAR; senão decimal.
  * - só '.' → se grupos de 3 dígitos → MILHAR; senão decimal.
- * - senão → inteiro puro.
  */
 function parseHumanNumber(raw: string) {
   let s = (raw || "").trim();
