@@ -182,7 +182,7 @@ const handleSubmit = async (score: number) => {
         runId: thisRunId,
         sessionId: "demo",
         scoreDelta: score,
-        txDelta: 0, // ALTERADO: sempre enviar 1 para transactionAmount
+        txDelta: 1, // ALTERADO: sempre enviar 1 para transactionAmount
         wallet,
       }),
     });

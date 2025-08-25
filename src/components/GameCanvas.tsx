@@ -632,7 +632,7 @@ export default function GameCanvas({
           className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
           title="Tela cheia"
         >
-          ⛶ Tela cheia
+          ⛶ 
         </button>
         <button
           onClick={() => {
@@ -648,14 +648,14 @@ export default function GameCanvas({
           className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
           title="Ativar som"
         >
-          🔊 Som
+          🔊
         </button>
         <button
           onClick={exitFullscreen}
           className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
           title="Sair da tela cheia"
         >
-          ↩︎ Sair
+          ↩︎
         </button>
       </div>
     </div>
