@@ -8,8 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // —— cache simples em memória para idempotência (por instância) ——
-const recentRuns: Set<string> =
-  (globalThis as any).__recentRuns ?? new Set<string>();
+const recentRuns: Set<string> = (globalThis as any).__recentRuns ?? new Set<string>();
 (globalThis as any).__recentRuns = recentRuns;
 
 // ABI mínima do contrato
@@ -94,8 +93,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     // —— Idempotência (runId no header ou body) ——
-    const runId =
-      String(req.headers.get("x-idempotency-key") || body?.runId || "").trim();
+    const runId = String(req.headers.get("x-idempotency-key") || body?.runId || "").trim();
     if (!runId)
       return NextResponse.json({ ok: false, error: "runId ausente" }, { status: 400 });
     if (recentRuns.has(runId))
@@ -114,13 +112,20 @@ export async function POST(req: NextRequest) {
 
     if (!wallet)
       return NextResponse.json({ ok: false, error: "wallet inválida" }, { status: 400 });
-    if (!Number.isFinite(scoreDelta) || scoreDelta <= 0)
-      return NextResponse.json({ ok: false, error: "scoreDelta inválido (> 0)" }, { status: 400 });
+
+    // ✅ aceita score >= 0 OU txDelta > 0 (ao menos um válido)
+    const scoreValid = Number.isFinite(scoreDelta) && scoreDelta >= 0;
+    if (!scoreValid && txDelta <= 0) {
+      return NextResponse.json(
+        { ok: false, error: "payload inválido (scoreDelta>=0 ou txDelta>0)" },
+        { status: 400 },
+      );
+    }
 
     const { contract, rpcUrl, chain, pk, confirmations, scoreFactor } = getEnvSafe();
 
-    // 🔧 MVP: aplica fator no score que será enviado (ex.: 0.5 = metade), arredonda p/ baixo, mínimo 1
-    const scaledScoreDelta = Math.max(1, Math.floor(scoreDelta * scoreFactor));
+    // 🔧 MVP: aplica fator no score (pode resultar 0)
+    const scaledScoreDelta = Math.max(0, Math.floor(scoreDelta * scoreFactor));
 
     // —— Envia transação ——
     const account = privateKeyToAccount(pk);

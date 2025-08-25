@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -41,7 +40,7 @@ export default function Home() {
   // leaderboard + high score local
   const [board, setBoard] = useState<Entry[]>([]);
   const [highScore, setHighScore] = useState<number>(0);
-  
+
   // recent txs
   const [recentTxs, setRecentTxs] = useState<TxEntry[]>([]);
 
@@ -50,11 +49,11 @@ export default function Home() {
   const submitLockRef = useRef(false);
   const pendingScoreRef = useRef<number | null>(null);
 
-  // valores ao vivo (sem barras, só números)
+  // valores ao vivo
   const [currentScore, setCurrentScore] = useState(0);
   const [currentSpeed, setCurrentSpeed] = useState(0);
 
-  // exige MONA ID
+  // exige MONAD GAMES ID
   useEffect(() => {
     if (!authenticated || !ready || !wallet) return;
     const url = `https://monad-games-id-site.vercel.app/api/check-wallet?wallet=${wallet}`;
@@ -74,22 +73,20 @@ export default function Home() {
     })();
   }, [authenticated, ready, wallet]);
 
-
-// util: deduplica por nome, mantém apenas o melhor score de cada nome e ordena desc
-function dedupeAndSortTopByName(entries: Entry[], limit: number) {
-  const bestByName = new Map<string, Entry>();
-  for (const e of entries) {
-    const cur = bestByName.get(e.name);
-    if (!cur || e.score > cur.score) bestByName.set(e.name, e);
+  // util: deduplica por nome, mantém o melhor score por nome e ordena desc
+  function dedupeAndSortTopByName(entries: Entry[], limit: number) {
+    const bestByName = new Map<string, Entry>();
+    for (const e of entries) {
+      const cur = bestByName.get(e.name);
+      if (!cur || e.score > cur.score) bestByName.set(e.name, e);
+    }
+    return Array.from(bestByName.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
-  return Array.from(bestByName.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
-}
 
-  // carrega leaderboard/highscore/recentTxs
+  // carrega highScore/recentTxs
   useEffect(() => {
-    
     const hs = localStorage.getItem("highScore");
     if (hs) setHighScore(parseInt(hs, 10) || 0);
     const savedTxs = localStorage.getItem("recentTxs");
@@ -108,19 +105,17 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
   const canPlay = Boolean(authenticated && wallet && username);
 
   function addToBoard(score: number) {
-  const entry: Entry = {
-    name: username || "Player",
-    score,
-    wallet: wallet ?? "",
-    at: Date.now(),
-  };
-
-  setBoard((prev) => {
-    const next = [...prev, entry];
-    return dedupeAndSortTopByName(next, 10);
-  });
-}
-
+    const entry: Entry = {
+      name: username || "Player",
+      score,
+      wallet: wallet ?? "",
+      at: Date.now(),
+    };
+    setBoard((prev) => {
+      const next = [...prev, entry];
+      return dedupeAndSortTopByName(next, 10);
+    });
+  }
 
   const handleRestart = () => {
     setLastScore(null);
@@ -133,104 +128,141 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
     setGameKey((k) => k + 1);
   };
 
-  const handleSubmit = async (score: number) => {
-    console.log('Starting handleSubmit', { score, wallet, runId: runIdRef.current });
-    setSubmitError(null);
-    if (submitLockRef.current) {
-      console.log('Early return: submit locked');
+  // ====== ENVIA SCORE (scoreDelta > 0) ======
+  // ====== ENVIA SCORE (scoreDelta > 0) E +1 TRANSAÇÃO ======
+const handleSubmit = async (score: number) => {
+  console.log("Starting handleSubmit", { score, wallet, runId: runIdRef.current });
+  setSubmitError(null);
+  if (submitLockRef.current) {
+    console.log("Early return: submit locked");
+    return;
+  }
+  submitLockRef.current = true;
+  const thisRunId = runIdRef.current;
+
+  try {
+    if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      console.log("Early return: invalid wallet", wallet);
+      setSubmitError("Wallet inválida.");
       return;
     }
-    submitLockRef.current = true;
-    const thisRunId = runIdRef.current;
+    if (!Number.isFinite(score) || score <= 0) {
+      console.log("Early return: invalid score", score);
+      setSubmitError("Score precisa ser > 0 (delta).");
+      return;
+    }
+    if (!thisRunId) {
+      console.log("Early return: no runId");
+      setSubmitError("Rodada inválida. Jogue novamente.");
+      return;
+    }
+    if (confirmed) {
+      console.log("Early return: already confirmed");
+      return;
+    }
 
-    try {
-      if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
-        console.log('Early return: invalid wallet', wallet);
-        setSubmitError("Wallet inválida.");
-        return;
-      }
-      if (!Number.isFinite(score) || score <= 0) {
-        console.log('Early return: invalid score', score);
-        setSubmitError("Score precisa ser > 0 (delta).");
-        return;
-      }
-      if (!thisRunId) {
-        console.log('Early return: no runId');
-        setSubmitError("Rodada inválida. Jogue novamente.");
-        return;
-      }
-      if (confirmed) {
-        console.log('Early return: already confirmed');
-        return;
-      }
+    setSubmitting(true);
+    setTxHash(null);
 
-      setSubmitting(true);
-      setTxHash(null);
+    console.log("Fetching /api/finish-run with body", {
+      runId: thisRunId,
+      sessionId: "demo",
+      scoreDelta: score,
+      txDelta: 1, // ALTERADO: sempre enviar 1 para transactionAmount
+      wallet,
+    });
 
-      console.log('Fetching /api/finish-run with body', {
+    const resp = await fetch("/api/finish-run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": thisRunId,
+      },
+      body: JSON.stringify({
         runId: thisRunId,
         sessionId: "demo",
         scoreDelta: score,
-        txDelta: 0,
+        txDelta: 0, // ALTERADO: sempre enviar 1 para transactionAmount
         wallet,
-      });
+      }),
+    });
 
-      const resp = await fetch("/api/finish-run", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Idempotency-Key": thisRunId,
-        },
-        body: JSON.stringify({
-          runId: thisRunId,
-          sessionId: "demo",
-          scoreDelta: score,
-          txDelta: 0,
-          wallet,
-        }),
-      });
+    console.log("Fetch response status", resp.status, resp.ok);
 
-      console.log('Fetch response status', resp.status, resp.ok);
+    const r = await resp.json().catch(() => ({}));
+    console.log("Parsed response json", r);
 
-      const r = await resp.json().catch(() => ({}));
-      console.log('Parsed response json', r);
+    if (!resp.ok || !r?.ok) {
+      const error = r?.error ?? "Falha ao enviar score.";
+      console.log("Error in response", error);
+      setSubmitError(error);
+      return;
+    }
 
-      if (!resp.ok || !r?.ok) {
-        const error = r?.error ?? "Falha ao enviar score.";
-        console.log('Error in response', error);
-        setSubmitError(error);
-        return;
-      }
+    console.log("Success, txHash", r.txHash);
 
-      console.log('Success, txHash', r.txHash);
-
-      if (runIdRef.current === thisRunId) {
-        setConfirmed(true);
-        setTxHash(r.txHash as string);
-        setSentOnchain(
-          r?.sent?.scoreDelta != null ? Number(r.sent.scoreDelta) : null
-        );
-      }
-      setRecentTxs((prev) => [
+    if (runIdRef.current === thisRunId) {
+      setConfirmed(true);
+      setTxHash(r.txHash as string);
+      setSentOnchain(r?.sent?.scoreDelta != null ? Number(r.sent.scoreDelta) : null);
+    }
+    setRecentTxs((prev) =>
+      [
         {
           txHash: r.txHash as string,
           score: Number(r?.sent?.scoreDelta) || score,
           at: Date.now(),
         },
         ...prev,
-      ].slice(0, 10));
-    } catch (e: any) {
-      console.error('Error in handleSubmit catch', e);
-      setSubmitError(e?.message ?? "Erro ao enviar score.");
-    } finally {
-      setSubmitting(false);
-      if (runIdRef.current === thisRunId) {
-        submitLockRef.current = false;
-      }
+      ].slice(0, 10),
+    );
+  } catch (e: any) {
+    console.error("Error in handleSubmit catch", e);
+    setSubmitError(e?.message ?? "Erro ao enviar score.");
+  } finally {
+    setSubmitting(false);
+    if (runIdRef.current === thisRunId) {
+      submitLockRef.current = false;
     }
-  };
+  }
+};
 
-  const top3 = useMemo(() => board.slice(0, 3), [board]); // opcional, pode remover
+  // ====== NOVO: ENVIA +1 TRANSAÇÃO (scoreDelta = 0, txDelta = 1) ======
+  async function handleUserTransaction(txHash: string) {
+    if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      console.warn("Wallet inválida para tx tracking");
+      return;
+    }
+    try {
+      const resp = await fetch("/api/finish-run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Idempotency-Key": txHash, // evita contagem em dobro
+        },
+        body: JSON.stringify({
+          runId: txHash, // usa o hash como idempotência
+          sessionId: "tx-only",
+          scoreDelta: 0, // sem pontos
+          txDelta: 1, // +1 transação
+          wallet,
+        }),
+      });
+      const r = await resp.json().catch(() => ({}));
+      if (!resp.ok || !r?.ok) {
+        console.warn("Falha ao registrar transactionAmount:", r?.error);
+        return;
+      }
+      // atualiza a listinha de “Últimas transações”
+      setRecentTxs((prev) =>
+        [{ txHash: (r.txHash as string) ?? txHash, score: 0, at: Date.now() }, ...prev].slice(0, 10),
+      );
+    } catch (e) {
+      console.warn("Erro no handleUserTransaction", e);
+    }
+  }
+
+  const top3 = useMemo(() => board.slice(0, 3), [board]);
 
   return (
     <main className="min-h-dvh flex flex-col items-center gap-6 p-4 sm:p-6">
@@ -280,26 +312,16 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
               {/* Valores simples */}
               <div className="flex justify-between text-white">
                 <div className="text-left">
-                  <div className="text-[10px] uppercase tracking-wider text-white/70">
-                    Score
-                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-white/70">Score</div>
                   <div className="text-base font-semibold">{currentScore}</div>
                 </div>
                 <div className="text-left">
-                  <div className="text-[10px] uppercase tracking-wider text-white/70">
-                    Speed
-                  </div>
-                  <div className="text-base font-semibold">
-                    {Math.round(currentSpeed)} px/s
-                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-white/70">Speed</div>
+                  <div className="text-base font-semibold">{Math.round(currentSpeed)} px/s</div>
                 </div>
                 <div className="text-left">
-                  <div className="text-[10px] uppercase tracking-wider text-white/70">
-                    High Score
-                  </div>
-                  <div className="text-lg font-bold text-yellow-300 drop-shadow">
-                    {highScore}
-                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-white/70">High Score</div>
+                  <div className="text-lg font-bold text-yellow-300 drop-shadow">{highScore}</div>
                 </div>
               </div>
             </div>
@@ -314,7 +336,7 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
                   setCurrentSpeed(speed);
                 }}
                 onGameOver={(score) => {
-                  console.log('Game over with score', score);
+                  console.log("Game over with score", score);
                   setLastScore(score);
                   // high score local
                   if (score > highScore) {
@@ -329,19 +351,18 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
                   // id de rodada + anti duplo envio
                   const rid =
                     (globalThis.crypto?.randomUUID?.() ??
-                      Math.random().toString(36).slice(2)) +
-                    Date.now().toString(36);
+                      Math.random().toString(36).slice(2)) + Date.now().toString(36);
                   runIdRef.current = rid;
                   pendingScoreRef.current = score;
                   submitLockRef.current = false;
                   if (score > 0) {
-                    console.log('Calling handleSubmit for score > 0');
+                    console.log("Calling handleSubmit for score > 0");
                     handleSubmit(score);
                   }
                 }}
               />
 
-              {/* ==== OVERLAY (avatar + stats + high score) - apenas em telas maiores ==== */}
+              {/* Overlay desktop */}
               <div className="pointer-events-none absolute left-3 top-3 right-3 hidden sm:flex flex-col sm:flex-row sm:items-center gap-3">
                 <div className="pointer-events-auto flex items-center gap-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 p-3 shadow-lg">
                   <img
@@ -356,21 +377,14 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
                     </div>
                   </div>
 
-                  {/* Valores simples */}
                   <div className="flex items-center gap-4 text-white">
                     <div className="text-right">
-                      <div className="text-[10px] uppercase tracking-wider text-white/70">
-                        Score
-                      </div>
+                      <div className="text-[10px] uppercase tracking-wider text-white/70">Score</div>
                       <div className="text-base font-semibold">{currentScore}</div>
                     </div>
                     <div className="text-right">
-                      <div className="text-[10px] uppercase tracking-wider text-white/70">
-                        Speed
-                      </div>
-                      <div className="text-base font-semibold">
-                        {Math.round(currentSpeed)} px/s
-                      </div>
+                      <div className="text-[10px] uppercase tracking-wider text-white/70">Speed</div>
+                      <div className="text-base font-semibold">{Math.round(currentSpeed)} px/s</div>
                     </div>
                   </div>
 
@@ -380,9 +394,7 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
                     <div className="text-[10px] uppercase tracking-wider text-white/70">
                       High Score
                     </div>
-                    <div className="text-lg font-bold text-yellow-300 drop-shadow">
-                      {highScore}
-                    </div>
+                    <div className="text-lg font-bold text-yellow-300 drop-shadow">{highScore}</div>
                   </div>
                 </div>
               </div>
@@ -393,8 +405,7 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
               <div className="w-full mt-3 rounded-2xl border border-white/10 bg-zinc-900/60 p-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div className="text-base sm:text-lg">
-                    🏁 Fim de jogo! Pontuação:{" "}
-                    <span className="font-bold">{lastScore}</span>
+                    🏁 Fim de jogo! Pontuação: <span className="font-bold">{lastScore}</span>
                     {lastScore > 0 && submitting && " - Enviando tx..."}
                     {lastScore > 0 && confirmed && " - Confirmado ✓"}
                   </div>
@@ -413,16 +424,14 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
                     ✅ Confirmado. Tx: <span className="opacity-80">{txHash}</span>
                   </p>
                 )}
-                {submitError && (
-                  <p className="mt-2 text-sm text-red-400">{submitError}</p>
-                )}
+                {submitError && <p className="mt-2 text-sm text-red-400">{submitError}</p>}
+
               </div>
             )}
 
             <p className="mt-2 text-xs text-white/70">
-              Toque na tela ou pressione{" "}
-              <kbd className="rounded bg-white/10 px-1">Espaço</kbd> para trocar
-              de pista.
+              Toque na tela ou pressione <kbd className="rounded bg-white/10 px-1">Espaço</kbd> para
+              trocar de pista.
             </p>
 
             {/* Últimas transações */}
@@ -447,10 +456,8 @@ function dedupeAndSortTopByName(entries: Entry[], limit: number) {
 
           {/* ==== COLUNA LEADERBOARD ==== */}
           <aside className="lg:sticky lg:top-4 h-fit">
-  <GlobalLeaderboard />
-</aside>
-
-
+            <GlobalLeaderboard />
+          </aside>
         </div>
       )}
     </main>
