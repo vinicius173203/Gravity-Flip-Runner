@@ -109,6 +109,14 @@ export async function POST(req: NextRequest) {
     const scoreDelta = Number(body?.scoreDelta ?? 0);
     const txDeltaRaw = Number(body?.txDelta ?? 0);
     const txDelta = Number.isFinite(txDeltaRaw) && txDeltaRaw > 0 ? txDeltaRaw : 0;
+    // 🔍 Aqui entra o log:
+    console.log("FINISH_RUN", {
+      runId,
+      wallet,
+      scoreDelta,
+      txDelta,
+      now: Date.now(),
+    });
 
     if (!wallet)
       return NextResponse.json({ ok: false, error: "wallet inválida" }, { status: 400 });
@@ -129,6 +137,15 @@ export async function POST(req: NextRequest) {
 
     // —— Envia transação ——
     const account = privateKeyToAccount(pk);
+    // 👇 AQUI (depois de criar o account, antes do writeContract)
+console.log('FINISH_RUN args', {
+  runId,
+  sender: account.address,  // quem está chamando updatePlayerData
+  wallet,                   // player
+  scoreDelta,
+  txDelta,
+  t: Date.now(),
+});
     const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
     const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
 
@@ -139,8 +156,14 @@ export async function POST(req: NextRequest) {
       args: [wallet, BigInt(scaledScoreDelta), BigInt(txDelta)],
     });
 
+    console.log('FINISH_RUN hash', { runId, hash });
     // Espera confirmação antes de responder
     const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations });
+console.log('FINISH_RUN receipt', {
+  runId,
+  block: receipt.blockNumber?.toString(),
+  status: (receipt as any).status ?? null,
+});
 
     const payload = {
       ok: true,
@@ -154,7 +177,9 @@ export async function POST(req: NextRequest) {
       receipt: {
         blockNumber: receipt.blockNumber?.toString(),
         status: (receipt as any).status ?? null,
+      
       },
+      
     };
 
     return new NextResponse(JSON.stringify(payload, bigintReplacer), {
@@ -162,6 +187,9 @@ export async function POST(req: NextRequest) {
       status: 200,
     });
   } catch (e: any) {
+    
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }
 }
+
+    

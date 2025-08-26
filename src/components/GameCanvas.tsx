@@ -34,13 +34,12 @@ const HYDRANT_GREEN_SRC = "/images/h1.png";
 const HYDRANT_RED_SRC = "/images/h2.png";
 const HYDRANT_BLUE_SRC = "/images/h3.png";
 
+
 /** Backgrounds em sequência (ordem = progressão) */
 const BG_SRCS = [
   "/images/bg1.png",
-  "/images/bg2.png",
   "/images/bg3.png",
   "/images/bg4.jpeg",
-  "/images/bg5.png",
   "/images/bg6.png",
   "/images/bg7.png",
   "/images/bg8.png",
@@ -87,16 +86,24 @@ type GameCanvasProps = {
   onGameOver: (score: number) => void;
   playerScale?: number;
   onStatsChange?: (s: { score: number; speed: number }) => void;
+   onRestartRequest?: () => void; 
+   locked?: boolean;                
+  onRequireLogin?: () => void;     
 };
 
 export default function GameCanvas({
   onGameOver,
   playerScale = 1.6,
   onStatsChange,
+  onRestartRequest, 
+   locked = false,           
+  onRequireLogin,  
 }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
+  const fadeRafRef = useRef<Map<HTMLAudioElement, number>>(new Map());
+
 
   // HUD (apenas flags/estado; não renderizamos overlays)
   const [gameOver, setGameOver] = useState(false);
@@ -137,6 +144,8 @@ export default function GameCanvas({
   const PLAYER_W = Math.round(PLAYER_BASE * playerScale);
   const PLAYER_H = Math.round(PLAYER_BASE * playerScale);
   const PLAYER_X = 120; // pode virar derivado tb se quiser
+  const lockedRef = useRef(!!locked);
+useEffect(() => { lockedRef.current = !!locked; }, [locked]);
 
   const resetStateRefs = () => {
     scoreRef.current = 0;
@@ -157,6 +166,7 @@ export default function GameCanvas({
     setGameOver(false);
     if (typeof onStatsChange === "function") {
       onStatsChange({ score: 0, speed: SPEED_START });
+      restartMusic();
     }
   };
 
@@ -264,30 +274,49 @@ export default function GameCanvas({
     window.addEventListener("keydown", unlockAudio);
 
     return () => {
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-      [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach((a) => a?.pause());
-      try {
-        ctx?.close();
-      } catch {}
-    };
+  window.removeEventListener("pointerdown", unlockAudio);
+  window.removeEventListener("keydown", unlockAudio);
+  [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach((a) => a?.pause());
+  try { ctx?.close(); } catch {}
+
+  // cancela quaisquer fades pendentes
+  fadeRafRef.current.forEach((id) => cancelAnimationFrame(id));
+  fadeRafRef.current.clear();
+};
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // util: fade
   function fadeAudio(el: HTMLAudioElement, to: number, secs: number) {
-    const from = el.volume;
-    const start = performance.now();
-    const dur = secs * 1000;
+  // clamp destino e origem
+  to = Math.max(0, Math.min(1, to));
+  let from = Math.max(0, Math.min(1, el.volume || 0));
+  const start = performance.now();
+  const dur = Math.max(0, secs * 1000);
 
-    const step = (now: number) => {
-      const t = Math.min(1, (now - start) / dur);
-      el.volume = from + (to - from) * t;
-      if (t < 1) requestAnimationFrame(step);
-      else el.volume = to;
-    };
-    requestAnimationFrame(step);
-  }
+  // cancela fade anterior neste elemento
+  const prev = fadeRafRef.current.get(el);
+  if (prev) cancelAnimationFrame(prev);
+
+  const tick = (now: number) => {
+    const t = dur ? Math.min(1, (now - start) / dur) : 1;
+    const v = from + (to - from) * t;
+    // clamp agressivo
+    el.volume = Math.max(0, Math.min(1, v));
+    if (t < 1) {
+      const id = requestAnimationFrame(tick);
+      fadeRafRef.current.set(el, id);
+    } else {
+      el.volume = to;
+      fadeRafRef.current.delete(el);
+    }
+  };
+
+  const id = requestAnimationFrame(tick);
+  fadeRafRef.current.set(el, id);
+}
+
 
   // toca só a faixa escolhida (com crossfade)
   function crossfadeTo(kind: MusicKind) {
@@ -320,6 +349,36 @@ export default function GameCanvas({
     fadeAudio(target, MUSIC_DEFAULT_VOL, MUSIC_FADE_SECS);
     currentMusicRef.current = kind;
   }
+function stopAllFades() {
+  fadeRafRef.current.forEach((id) => cancelAnimationFrame(id));
+  fadeRafRef.current.clear();
+}
+
+function restartMusic() {
+  // garante que a permissão está ok (o clique no botão conta como gesture)
+  try { audioCtxRef.current?.resume(); } catch {}
+  audioUnlockedRef.current = true;
+
+  // cancela fades antigos
+  stopAllFades();
+
+  // zera e prepara todas as faixas
+  const els = [
+    explorationMusicRef.current,
+    battleMusicRef.current,
+    bossMusicRef.current,
+  ];
+  for (const el of els) {
+    if (!el) continue;
+    try { el.pause(); } catch {}
+    el.currentTime = 0;
+    el.volume = 0; // recomeça mudo, vamos dar fade-in abaixo
+  }
+
+  // força recomputar alvo e tocar
+  currentMusicRef.current = null;
+  crossfadeTo("exploration");
+}
 
   // escolhe música pelo score
   function evaluateMusicByScore(score: number) {
@@ -334,37 +393,39 @@ export default function GameCanvas({
 
   // loop principal
   useEffect(() => {
-    resetStateRefs();
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!ctx) return;
+  resetStateRefs();
+  const ctx = canvasRef.current?.getContext("2d");
+  if (!ctx) return;
 
-    let mounted = true;
+  let mounted = true;
 
-    const frame = (ts: number) => {
-      if (!mounted) return;
-      if (lastTsRef.current == null) lastTsRef.current = ts;
-      const dt = Math.min(0.04, (ts - lastTsRef.current) / 1000);
-      lastTsRef.current = ts;
+  const frame = (ts: number) => {
+    if (!mounted) return;
+    if (lastTsRef.current == null) lastTsRef.current = ts;
+    const dt = Math.min(0.04, (ts - lastTsRef.current) / 1000);
+    lastTsRef.current = ts;
 
-      if (!stoppedRef.current) {
-        step(dt);
-        draw(ctx);
-        rafRef.current = requestAnimationFrame(frame);
-      } else {
-        draw(ctx);
-      }
-    };
+    if (!stoppedRef.current) {
+      step(dt);       // roda lógica só se não estiver parado
+    }
+    draw(ctx);        // pode desenhar sempre (mostra overlay etc.)
 
+    // 👇 SEMPRE reagenda o próximo frame
     rafRef.current = requestAnimationFrame(frame);
-    return () => {
-      mounted = false;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetsReady]);
+  };
+
+  rafRef.current = requestAnimationFrame(frame);
+  return () => {
+    mounted = false;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  };
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [assetsReady]);
+
 
   // lógica por frame
   const step = (dt: number) => {
+    if (lockedRef.current) return; 
     const dx = speedRef.current * dt;
 
     // parallax
@@ -570,20 +631,25 @@ export default function GameCanvas({
 
   // inputs globais
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code === "Space" || e.code === "ArrowUp") {
-        e.preventDefault();
-        flipLane();
-      }
-    };
-    const onClick = () => flipLane();
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onClick);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onClick);
-    };
-  }, [flipLane]);
+  const onKey = (e: KeyboardEvent) => {
+    if (e.code === "Space" || e.code === "ArrowUp") {
+      e.preventDefault();
+      if (lockedRef.current) { onRequireLogin?.(); return; } // 👈
+      flipLane();
+    }
+  };
+  const onClick = () => {
+    if (lockedRef.current) { onRequireLogin?.(); return; }   // 👈
+    flipLane();
+  };
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("pointerdown", onClick);
+  return () => {
+    window.removeEventListener("keydown", onKey);
+    window.removeEventListener("pointerdown", onClick);
+  };
+}, [flipLane, onRequireLogin]);
+
 
   /** ======== FULLSCREEN + LANDSCAPE ======== */
   const enterFullscreenAndLandscape = async () => {
@@ -624,6 +690,36 @@ export default function GameCanvas({
         className={`w-full h-auto rounded-2xl border border-white/10 ${gameOver ? "opacity-90" : "opacity-100"}`}
         style={{ background: "rgba(0,0,0,0.5)" }}
       />
+      {/* Overlay de login quando travado */}
+{locked && (
+  <div className="absolute inset-0 flex items-center justify-center">
+    <button
+      onPointerDown={(e) => e.stopPropagation()} // evita flip de pista global
+      onClick={(e) => {
+        e.stopPropagation();
+        onRequireLogin?.(); // abre fluxo de login
+      }}
+      className="pointer-events-auto px-5 py-3 rounded-2xl bg-white/15 text-white text-base backdrop-blur border border-white/20 hover:bg-white/25 shadow-lg"
+      title="Entrar para jogar"
+    >
+      Você precisa estar logado para jogar
+    </button>
+  </div>
+)}
+
+      {gameOver && (
+  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+    <button
+      onClick={() => { resetStateRefs(); onRestartRequest?.(); }}
+      className="pointer-events-auto px-5 py-3 rounded-2xl bg-white/15 text-white text-base backdrop-blur border border-white/20 hover:bg-white/25 shadow-lg"
+      title="Jogar novamente"
+    >
+      Jogar novamente
+    </button>
+  </div>
+)}
+
+
 
       {/* Toolbar (top-right) */}
       <div className="absolute top-2 right-2 flex items-center gap-2">

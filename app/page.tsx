@@ -125,11 +125,9 @@ export default function Home() {
     setSentOnchain(null);
     runIdRef.current = null;
     pendingScoreRef.current = null;
-    setGameKey((k) => k + 1);
   };
 
   // ====== ENVIA SCORE (scoreDelta > 0) ======
-  // ====== ENVIA SCORE (scoreDelta > 0) E +1 TRANSAÇÃO ======
 const handleSubmit = async (score: number) => {
   console.log("Starting handleSubmit", { score, wallet, runId: runIdRef.current });
   setSubmitError(null);
@@ -186,12 +184,12 @@ const handleSubmit = async (score: number) => {
         wallet,
       }),
     });
-
+    
     console.log("Fetch response status", resp.status, resp.ok);
 
     const r = await resp.json().catch(() => ({}));
     console.log("Parsed response json", r);
-
+    
     if (!resp.ok || !r?.ok) {
       const error = r?.error ?? "Falha ao enviar score.";
       console.log("Error in response", error);
@@ -244,10 +242,12 @@ const handleSubmit = async (score: number) => {
           runId: txHash, // usa o hash como idempotência
           sessionId: "tx-only",
           scoreDelta: 0, // sem pontos
-          txDelta: 1, // +1 transação
+          txDelta: 0, // +1 transação
           wallet,
+          
         }),
       });
+      
       const r = await resp.json().catch(() => ({}));
       if (!resp.ok || !r?.ok) {
         console.warn("Falha ao registrar transactionAmount:", r?.error);
@@ -261,7 +261,7 @@ const handleSubmit = async (score: number) => {
       console.warn("Erro no handleUserTransaction", e);
     }
   }
-
+  
   const top3 = useMemo(() => board.slice(0, 3), [board]);
 
   return (
@@ -279,9 +279,7 @@ const handleSubmit = async (score: number) => {
           </button>
         ) : (
           <div className="flex items-center gap-3">
-            <span className="text-xs sm:text-sm opacity-70">
-              {username ? `MONAD ID: ${username}` : ""}
-            </span>
+            
             <button onClick={() => logout()} className="px-3 py-2 bg-zinc-800 rounded">
               Sair
             </button>
@@ -360,6 +358,7 @@ const handleSubmit = async (score: number) => {
                     handleSubmit(score);
                   }
                 }}
+                onRestartRequest={handleRestart}
               />
 
               {/* Overlay desktop */}
@@ -409,7 +408,7 @@ const handleSubmit = async (score: number) => {
                     {lastScore > 0 && submitting && " - Enviando tx..."}
                     {lastScore > 0 && confirmed && " - Confirmado ✓"}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 hidden">
                     <button
                       onClick={handleRestart}
                       className="px-3 py-2 rounded bg-zinc-800 hover:bg-zinc-700"

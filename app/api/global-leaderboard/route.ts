@@ -1,6 +1,11 @@
 // /app/api/global-leaderboard/route.ts
 import { NextResponse } from "next/server";
 
+// 🚫 desliga cache do Next/Vercel para esta rota
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+// Se estiver em Next >= 14.2: export const fetchCache = "default-no-store";
+
 const SOURCE =
   "https://monad-games-id-site.vercel.app/leaderboard?page=1&gameId=89&sortBy=scores";
 const TOP_N = 10;
@@ -52,8 +57,9 @@ export async function GET() {
   }
 }
 
+// ✅ não deixe o CDN/navegador reter a resposta desta rota
 function withCacheHeaders(resp: NextResponse) {
-  resp.headers.set("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
+  resp.headers.set("Cache-Control", "private, no-store, no-cache, must-revalidate");
   return resp;
 }
 
@@ -61,7 +67,13 @@ function withCacheHeaders(resp: NextResponse) {
 
 async function fetchAndParse(): Promise<Entry[]> {
   const res = await fetch(SOURCE, {
+    // ✅ desliga cache do fetch no Next
+    cache: "no-store",
+    next: { revalidate: 0 },
     headers: {
+      // pede sempre uma cópia fresca da origem/CDN
+      "Cache-Control": "no-cache",
+      "Pragma": "no-cache",
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
       Accept: "text/html,application/xhtml+xml",
@@ -70,11 +82,11 @@ async function fetchAndParse(): Promise<Entry[]> {
   if (!res.ok) throw new Error(`Upstream ${res.status}`);
   const html = await res.text();
 
+  // ... resto igual ...
   // 1) escolhe a tabela mais provável
   const tables = (html.match(/<table[\s\S]*?<\/table>/gi) ?? []) as string[];
   if (tables.length === 0) throw new Error("Nenhuma <table> no HTML");
 
-  // 🔧 Evita "possibly undefined": garantimos que chosen é string
   let chosen: string = tables[0];
   const maybe = tables.find((t) => {
     const headTxt = (t.match(/<th[\s\S]*?<\/th>/gi) ?? [])
@@ -100,12 +112,11 @@ async function fetchAndParse(): Promise<Entry[]> {
     const tds = row.match(/<td[\s\S]*?<\/td>/gi);
     if (!tds) continue;
 
-    // fallback por heurística
     if (walletCol < 0) walletCol = guessWalletCol(tds);
     if (scoreCol < 0) scoreCol = guessScoreCol(tds);
     if (playerCol < 0) playerCol = guessPlayerCol(tds, walletCol, scoreCol);
 
-    if (playerCol < 0 || scoreCol < 0) continue; // segurança extra
+    if (playerCol < 0 || scoreCol < 0) continue;
 
     const nameCell = tds[playerCol];
     const scoreCell = tds[scoreCol];
@@ -114,14 +125,13 @@ async function fetchAndParse(): Promise<Entry[]> {
     const name = cleanName(stripHtml(nameCell));
     if (!name || isRankLike(name)) continue;
 
-    const scoreTextRaw = normalizeScoreText(stripHtml(scoreCell)); // "8,582" | "8.584" | "284"
-    const score = parseHumanNumber(scoreTextRaw);                   // 8582    | 8584    | 284
-    const display = scoreTextRaw.replace(/,/g, ".");                // exibir com ponto como milhar
+    const scoreTextRaw = normalizeScoreText(stripHtml(scoreCell));
+    const score = parseHumanNumber(scoreTextRaw);
+    const display = scoreTextRaw.replace(/,/g, ".");
 
     if (Number.isFinite(score)) entries.push({ name, score, display });
   }
 
-  // 4) dedupe por nome (maior score) e ordena
   const top = Array.from(bestByName(entries).entries())
     .map(([name, v]) => ({ name, score: v.score, display: v.display }))
     .sort((a, b) => b.score - a.score)
@@ -129,6 +139,9 @@ async function fetchAndParse(): Promise<Entry[]> {
 
   return top;
 }
+
+// ... helpers inalterados ...
+
 
 /* =============== helpers =============== */
 
