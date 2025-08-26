@@ -404,7 +404,7 @@ const handleSubmit = async (score: number) => {
               <div className="w-full mt-3 rounded-2xl border border-white/10 bg-zinc-900/60 p-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div className="text-base sm:text-lg">
-                    🏁 Fim de jogo! Pontuação: <span className="font-bold">{lastScore}</span>
+                    🏁 Game over! Score: <span className="font-bold">{lastScore}</span>
                     {lastScore > 0 && submitting && " - Enviando tx..."}
                     {lastScore > 0 && confirmed && " - Confirmado ✓"}
                   </div>
@@ -413,14 +413,14 @@ const handleSubmit = async (score: number) => {
                       onClick={handleRestart}
                       className="px-3 py-2 rounded bg-zinc-800 hover:bg-zinc-700"
                     >
-                      Jogar novamente
+                      Play again
                     </button>
                   </div>
                 </div>
 
                 {txHash && (
                   <p className="mt-2 text-sm">
-                    ✅ Confirmado. Tx: <span className="opacity-80">{txHash}</span>
+                    ✅ Confirmed. Tx: <span className="opacity-80">{txHash}</span>
                   </p>
                 )}
                 {submitError && <p className="mt-2 text-sm text-red-400">{submitError}</p>}
@@ -429,13 +429,12 @@ const handleSubmit = async (score: number) => {
             )}
 
             <p className="mt-2 text-xs text-white/70">
-              Toque na tela ou pressione <kbd className="rounded bg-white/10 px-1">Espaço</kbd> para
-              trocar de pista.
+              Tap the screen or press <kbd className="rounded bg-white/10 px-1">Space</kbd> to change lanes.
             </p>
 
             {/* Últimas transações */}
             <div className="mt-6">
-              <h2 className="text-lg font-semibold text-white mb-2">Últimas transações enviadas</h2>
+              <h2 className="text-lg font-semibold text-white mb-2">Latest Sent Transactions</h2>
               <ol className="space-y-2">
                 {recentTxs.length === 0 && (
                   <li className="text-white/70 text-sm">Nenhuma ainda.</li>
