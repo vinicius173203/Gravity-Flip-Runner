@@ -162,6 +162,10 @@ const GameCanvas = ({
   const lastTsRef = useRef<number | null>(null);
   const stoppedRef = useRef(false);
   const notifiedRef = useRef(false);
+  // refs novas
+  const gravGraceUntilRef = useRef(0);
+  const GRAV_END_GRACE = 0.5; // segundos de invulnerabilidade ao acabar gravity
+
 
   // ===== GRAVIDADE COMO MECÂNICA CENTRAL =====
   const gravityInvertedRef = useRef(false);     // estado alvo (baixo=false, topo=true)
@@ -600,6 +604,7 @@ setGameStarted(true);
       const gravActive = isGravity();
       if (wasGravityRef.current && !gravActive) {
         gravityFlipCooldownRef.current = 0;
+        gravGraceUntilRef.current = nowSec() + GRAV_END_GRACE;
       }
       wasGravityRef.current = gravActive;
 
@@ -636,7 +641,8 @@ setGameStarted(true);
         (o.lane === "top" && playerLaneIsTop);
       const overlapX = o.x < PLAYER_X + PLAYER_W && o.x + HYDRANT_W > PLAYER_X;
 
-      if (!o.fake && !isGhost() && sameLane && overlapX) {
+       const invulneravel = isGhost() || (nowSec() < gravGraceUntilRef.current);
+        if (!o.fake && !invulneravel && sameLane && overlapX) {
         if (!stoppedRef.current) {
           stoppedRef.current = true;
           setGameOver(true);
@@ -1004,7 +1010,7 @@ setGameStarted(true);
       setShowCharSelect(true);
     }
   };
-  + // expõe openCharSelect para o pai
+  // expõe openCharSelect para o pai
 useImperativeHandle(ref, () => ({
   openCharSelect,
  }), [gameOver, gameStarted]);
@@ -1017,30 +1023,72 @@ useImperativeHandle(ref, () => ({
     >
       {/* Tela de seleção de personagem (responsiva: coluna em mobile, grid em desktop) */}
       {showCharSelect && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-2xl z-10 p-4">
-          <h2 className="text-white text-2xl font-bold mb-6">Escolha seu Personagem</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-md">
-            {CHARACTERS.map((char) => (
-              <button
-                key={char.src}
-                onClick={() => {
-                  startGame(char);
-                }}
-                className={`flex flex-col items-center p-4 rounded-xl bg-white/10 border ${
-                  selectedCharacter?.src === char.src ? "border-white/50" : "border-white/20"
-                } hover:bg-white/20 transition-all`}
-              >
-                <img
-                  src={char.src}
-                  alt={char.name}
-                  className="w-24 h-24 object-contain mb-2" // Tamanho touch-friendly
-                />
-                <span className="text-white text-base">{char.name}</span>
-              </button>
-            ))}
+  <div className="absolute inset-0 z-10 bg-black/80 backdrop-blur-md rounded-2xl">
+    <div className="absolute inset-0 flex items-center justify-center p-3">
+      <div className="w-full max-w-[560px] rounded-2xl border border-white/10 bg-zinc-900/70 shadow-2xl">
+
+        {/* Cabeçalho fixo */}
+        <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/80 backdrop-blur">
+          <h2 className="text-white text-lg font-semibold">Select character</h2>
+          <button
+            onClick={() => setShowCharSelect(false)}
+            className="rounded-xl px-3 py-1.5 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Lista — vertical no mobile, grid a partir do sm */}
+        <div className="px-3 pt-3 pb-2 max-h-[calc(100svh-220px)] overflow-y-auto">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+            {CHARACTERS.map((char) => {
+              const isSel = selectedCharacter?.src === char.src;
+              return (
+                <button
+                  key={char.src}
+                  onClick={() => setSelectedCharacter(char)}
+                  className={`flex items-center gap-3 w-full p-3 rounded-xl border transition
+                    ${isSel
+                      ? "bg-white/20 border-white/40"
+                      : "bg-white/10 border-white/15 hover:bg-white/15"}`}
+                >
+                  <img
+                    src={char.src}
+                    alt={char.name}
+                    className="h-14 w-14 rounded-lg object-contain ring-1 ring-white/10 bg-black/20"
+                  />
+                  <div className="flex-1 text-left">
+                    <div className="text-white text-base font-medium">{char.name}</div>
+                    {isSel && <div className="text-emerald-300 text-xs">Selecionado</div>}
+                  </div>
+                  {isSel && <span className="text-emerald-300 text-lg">✓</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
-      )}
+
+        {/* Rodapé fixo */}
+        <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 px-4 py-3 border-t border-white/10 bg-zinc-900/80 backdrop-blur">
+          <button
+            onClick={() => setShowCharSelect(false)}
+            className="rounded-xl px-4 py-2 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => startGame()}
+            className="rounded-xl px-4 py-2 bg-emerald-600 text-white text-sm hover:opacity-90"
+          >
+            Play
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+)}
+
 
       {/* Canvas (só visível se houver personagem selecionado) */}
       {selectedCharacter && (
