@@ -38,13 +38,13 @@ const HYDRANT_BLUE_SRC = "/images/h3.png";
 const BG_SRCS = [
   "/images/bg1.png",
   "/images/bg3.png",
-  "/images/bg4.jpeg",
+  "/images/bg4.png",
   "/images/bg6.png",
   "/images/bg7.png",
   "/images/bg8.png",
-  "/images/bg9.png",
-  "/images/bg10.jpeg",
+
 ];
+
 
 /** Troca de tema a cada N pontos desviados */
 const THEME_INTERVAL = 8;
