@@ -46,13 +46,15 @@ const CHARACTERS: Character[] = [
 type BgItem =
   | { type: "image"; src: string }
   | { type: "video"; src: string; loop?: boolean };
-
+//{ type: "video", src: "/videos/bg5.mp4", loop: true }, // bg3 como vídeo
 const BG_ITEMS: BgItem[] = [
   { type: "image", src: "/images/bg1.png" },
-  { type: "video", src: "/videos/bg3.mp4", loop: true }, // bg3 como vídeo
-  { type: "video", src: "/videos/bg4.mp4", loop: true }, // bg3 como vídeo
-  { type: "video", src: "/videos/bg5.mp4", loop: true }, // bg3 como vídeo
-  { type: "image", src: "/images/bg7.png" },
+  { type: "image", src: "/images/bg2.png" },
+  { type: "image", src: "/images/bg3.png" },
+   { type: "image", src: "/images/bg4.png"},
+   { type: "image", src: "/images/bg6.png" },
+   { type: "image", src: "/images/bg7.png" },
+  
   { type: "image", src: "/images/bg8.png" },
 ];
 
@@ -164,13 +166,16 @@ const GameCanvas = ({
   const notifiedRef = useRef(false);
   // refs novas
   const gravGraceUntilRef = useRef(0);
-  const GRAV_END_GRACE = 0.5; // segundos de invulnerabilidade ao acabar gravity
+  const GRAV_END_GRACE = 1; // segundos de invulnerabilidade ao acabar gravity
+  const wantFlipRef = useRef(false);
+  const justFlippedAtRef = useRef(0); 
+
 
 
   // ===== GRAVIDADE COMO MECÂNICA CENTRAL =====
   const gravityInvertedRef = useRef(false);     // estado alvo (baixo=false, topo=true)
   const gravityFlipCooldownRef = useRef(0);     // cooldown anti-spam
-  const FLIP_COOLDOWN = 0.35;
+  const FLIP_COOLDOWN = 0.01;
   // tween da posição do player entre chão (0) e teto (1)
   const playerYAnimRef = useRef(0);             // alvo 0|1
   const playerYAnimTRef = useRef(1);            // progresso 0..1 (começa “em sincronia”)
@@ -283,19 +288,14 @@ setGameStarted(true);
 
   // ===== INPUT: inverter gravidade =====
   const flipGravity = useCallback(() => {
-    if (stoppedRef.current) return;
-    if (gravityFlipCooldownRef.current > 0) return;
+  if (stoppedRef.current) return;
+  if (lockedRef.current) return;
+  wantFlipRef.current = true; // só marca pedido; quem decide é o step()
+}, []);
 
-    // Se power-up GRAVITY estiver ativo, mantenha invertido (não permite desinverter)
-    const powerUpForcing = nowSec() < gravityUntilRef.current;
-    if (powerUpForcing && gravityInvertedRef.current) return;
 
-    gravityInvertedRef.current = !gravityInvertedRef.current;
-    playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0; // alvo do tween
-    playerYAnimTRef.current = 0;
-    gravityFlipCooldownRef.current = FLIP_COOLDOWN;
-    lastFlipAtRef.current = nowSec();
-  }, []);
+
+
 
   /** ===== carregar BG (imagem/vídeo) e sprites ===== */
   useEffect(() => {
@@ -583,16 +583,63 @@ setGameStarted(true);
   function isGhost()   { return nowSec() < ghostUntilRef.current; }
   function hasClone()  { return nowSec() < cloneUntilRef.current; }
   function isGravity() { return nowSec() < gravityUntilRef.current; }
+  function justEnded(endTs: number, windowSec = 0.25) {
+  if (!endTs) return false;
+  const dt = nowSec() - endTs;
+  // true se acabou nos últimos N segundos
+  return dt >= 0 && dt <= windowSec;
+}
 
   // lógica por frame
   const step = (dt: number) => {
     if (lockedRef.current) return;
     const dx = speedRef.current * dt;
+    // ===== PROCESSAR PEDIDO DE FLIP AQUI (sem race com o input) =====
+// ===== PROCESSA PEDIDO DE FLIP (fonte única da verdade) =====
+if (wantFlipRef.current) {
+  wantFlipRef.current = false; // consome o pedido
+
+  const now = nowSec();
+
+  // Evita duplo-flip no mesmo frame ou a cada ~50ms (toque duplicado/pointer)
+  if (now - justFlippedAtRef.current < 0.05) {
+    // ignore este pedido
+  } else {
+    // Se acabou ghost/gravity "agora há pouco" OU estamos na janela de graça -> zera cooldown
+    const endedGhostRecently = ghostUntilRef.current > 0 && now >= ghostUntilRef.current && (now - ghostUntilRef.current) <= 0.30;
+    const endedGravRecently  = gravityUntilRef.current > 0 && now >= gravityUntilRef.current && (now - gravityUntilRef.current) <= 0.30;
+    if (endedGhostRecently || endedGravRecently || now < gravGraceUntilRef.current) {
+      gravityFlipCooldownRef.current = 0;
+    }
+
+    // Enquanto GRAVITY estiver ativo, não permite desinverter (ele força invertido)
+    const forcing = now < gravityUntilRef.current;
+    const alreadyInverted = gravityInvertedRef.current;
+
+    // Só flipa se não tiver cooldown OU se estivermos na janela de graça
+    if (gravityFlipCooldownRef.current <= 0 || now < gravGraceUntilRef.current) {
+      if (!(forcing && alreadyInverted)) {
+        gravityInvertedRef.current = !alreadyInverted;
+        playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0;
+        playerYAnimTRef.current = 0;
+        gravityFlipCooldownRef.current = FLIP_COOLDOWN; // mantém seu valor (0.01 se quiser)
+        lastFlipAtRef.current = now;
+        justFlippedAtRef.current = now; // trava micro-janela contra duplo-flip
+      }
+    }
+  }
+}
+
+
 
     // cooldown do flip
     if (gravityFlipCooldownRef.current > 0) {
-      gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
-    }
+  gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
+}
+if (playerYAnimTRef.current < 1) {
+  playerYAnimTRef.current = Math.min(1, playerYAnimTRef.current + dt / FLIP_TWEEN_SECS);
+}
+
     // --- liberar flip imediatamente quando o ghost termina ---
     const ghostActive = isGhost();
     if (wasGhostRef.current && !ghostActive) {
@@ -601,12 +648,19 @@ setGameStarted(true);
     }
     wasGhostRef.current = ghostActive;
     // --- liberar flip imediatamente quando o GRAVITY termina ---
-      const gravActive = isGravity();
-      if (wasGravityRef.current && !gravActive) {
-        gravityFlipCooldownRef.current = 0;
-        gravGraceUntilRef.current = nowSec() + GRAV_END_GRACE;
-      }
-      wasGravityRef.current = gravActive;
+
+    const gravActive = isGravity();
+if (wasGravityRef.current && !gravActive) {
+  const now = nowSec();
+  gravityFlipCooldownRef.current = 0;               // pode flipar já
+  gravGraceUntilRef.current = now + GRAV_END_GRACE; // janela de graça (1s)
+  // NÃO altere gravityInvertedRef nem playerYAnim* aqui.
+  lastFlipAtRef.current = now;
+}
+wasGravityRef.current = gravActive;
+
+
+
 
     // tween entre chão (0) e teto (1)
     if (playerYAnimTRef.current < 1) {
