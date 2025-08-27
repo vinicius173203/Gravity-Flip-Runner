@@ -324,6 +324,20 @@ const handleSubmit = async (score: number) => {
                 </div>
               </div>
             </div>
+            {/* Botão Selecionar personagem (MOBILE) no mesmo quadro após High Score */}
+            <div className="mt-2 sm:hidden">
+              <button
+                onClick={() => gameRef.current?.openCharSelect()}
+                disabled={lastScore === null} // só clicável após Game Over
+                className={`w-full px-3 py-2 rounded-2xl text-sm border
+                  ${lastScore !== null
+                    ? "bg-black/50 text-white border-white/15 hover:bg-black/70"
+                    : "bg-black/30 text-white/60 border-white/10 cursor-not-allowed"}`}
+                title={lastScore !== null ? "Selecionar personagem" : "Disponível após o fim da partida"}
+              >
+                👤 Select character
+              </button>
+            </div>
 
 
             <div className="relative">

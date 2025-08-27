@@ -1123,27 +1123,6 @@ useImperativeHandle(ref, () => ({
           </button>
         </div>
       )}
-
-      {/* High Score e Botão de Troca de Personagem (top-left, visível quando não jogando ou game over) */}
-      {/* Top-left HUD: botão Selecionar + High Score */}
-        {!showCharSelect && (
-          <div className="absolute top-2 left-2 flex items-center gap-2">
-            <button
-              onClick={gameOver ? openCharSelect : undefined}
-              disabled={!gameOver}
-              className={`px-3 py-2 rounded-2xl text-white text-sm backdrop-blur border border-white/10
-                ${gameOver
-                  ? "bg-black/50 hover:bg-black/70 cursor-pointer opacity-100"
-                  : "bg-black/30 cursor-not-allowed opacity-50"}`}
-              title={gameOver ? "Selecionar personagem" : "Disponível após o fim da partida"}
-            >
-              👤 Selecionar personagem
-            </button>
-            <div className="px-3 py-2 rounded-2xl bg-black/50 text-white text-sm backdrop-blur border border-white/10">
-              High Score: {highScore}
-            </div>
-          </div>
-        )}
     </div>
   );
 }
