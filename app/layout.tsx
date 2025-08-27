@@ -2,8 +2,8 @@ import "./globals.css";
 import Providers from "./providers";
 
 export const metadata = {
-  title: "Gravity Flip Runner — Mission 7",
-  description: "Game demo integrated with Monad Games ID (Testnet)",
+  title: "Zero Gravity Runner",
+  description: "Game integrated with Monad Games ID (Testnet)",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

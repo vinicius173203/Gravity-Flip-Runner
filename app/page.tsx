@@ -236,13 +236,13 @@ const handleSubmit = async (score: number) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Idempotency-Key": txHash, // evita contagem em dobro
+          "X-Idempotency-Key": txHash,
         },
         body: JSON.stringify({
-          runId: txHash, // usa o hash como idempotência
+          runId: txHash, 
           sessionId: "tx-only",
-          scoreDelta: 0, // sem pontos
-          txDelta: 0, // +1 transação
+          scoreDelta: 0, 
+          txDelta: 0, 
           wallet,
           
         }),

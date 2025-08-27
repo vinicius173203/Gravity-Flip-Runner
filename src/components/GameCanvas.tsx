@@ -676,15 +676,6 @@ export default function GameCanvas({
           v.play();
         } catch {}
       }
-
-      // ===== TOCAR DE VEZ EM QUANDO (opcional):
-      // Se quiser que o vídeo toque só às vezes, em vez de loopar:
-      // - Troque o BG_ITEMS do vídeo para { type:"video", src:"/videos/bg3.mp4", loop:false }
-      // - E aqui você pode dar play com uma chance:
-      // if (media && media[targetIdx] instanceof HTMLVideoElement) {
-      //   const v = media[targetIdx] as HTMLVideoElement;
-      //   if (v.paused && Math.random() < 0.3) { try { v.currentTime = 0; v.play(); } catch {} }
-      // }
     }
 
     if (bgFadeTRef.current < 1) {
