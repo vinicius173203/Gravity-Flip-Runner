@@ -268,7 +268,7 @@ const handleSubmit = async (score: number) => {
     <main className="min-h-dvh flex flex-col items-center gap-6 p-4 sm:p-6">
       {/* Header */}
       <div className="flex w-full max-w-7xl items-center justify-between">
-        <h1 className="text-2xl sm:text-3xl font-bold">Gravity Runner</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold">Zero Gravity Runner</h1>
         {!authenticated ? (
           <button
             onClick={() => login()}
