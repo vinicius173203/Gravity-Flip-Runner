@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -6,7 +7,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 /** Velocidade (ajuste ao gosto) */
 const SPEED_START = 225; // px/s inicial
-const SPEED_ADD = 25; // +px/s por obstáculo DESVIADO
+const SPEED_ADD = 25;    // +px/s por obstáculo DESVIADO
 const SPEED_MAX = 5000;
 
 /** Canvas base (o canvas renderiza nesses "px lógicos" e é escalado via CSS) */
@@ -34,17 +35,19 @@ const HYDRANT_GREEN_SRC = "/images/h1.png";
 const HYDRANT_RED_SRC = "/images/h2.png";
 const HYDRANT_BLUE_SRC = "/images/h3.png";
 
-/** Backgrounds em sequência (ordem = progressão) */
-const BG_SRCS = [
-  "/images/bg1.png",
-  "/images/bg3.png",
-  "/images/bg4.png",
-  "/images/bg6.png",
-  "/images/bg7.png",
-  "/images/bg8.png",
+/** Backgrounds em sequência (ordem = progressão) — agora com vídeo no slot do bg3 */
+type BgItem =
+  | { type: "image"; src: string }
+  | { type: "video"; src: string; loop?: boolean };
 
+const BG_ITEMS: BgItem[] = [
+  { type: "image", src: "/images/bg1.png" },
+  { type: "video", src: "/videos/bg3.mp4", loop: true }, // bg3 como vídeo
+  { type: "video", src: "/videos/bg4.mp4", loop: true }, // bg3 como vídeo
+  { type: "video", src: "/videos/bg5.mp4", loop: true }, // bg3 como vídeo
+  { type: "image", src: "/images/bg7.png" },
+  { type: "image", src: "/images/bg8.png" },
 ];
-
 
 /** Troca de tema a cada N pontos desviados */
 const THEME_INTERVAL = 8;
@@ -63,7 +66,7 @@ const MUSIC = {
 } as const;
 
 const MUSIC_EXPLORATION_MAX = 20; // score <= 20 → exploração
-const MUSIC_BATTLE_MAX = 40; // 21..49 → batalha
+const MUSIC_BATTLE_MAX = 40;      // 21..49 → batalha
 // >= 50 → boss
 
 const MUSIC_FADE_SECS = 0.8; // fade entre faixas
@@ -78,8 +81,8 @@ type MusicKind = keyof typeof MUSIC;
 type PowerUpKind = "ghost" | "clone" | "gravity";
 const PU_DURATION: Record<PowerUpKind, number> = {
   ghost: 6,    // atravessa tudo
-  clone: 8,    // 
-  gravity: 6,  // gravidade invertida
+  clone: 8,    // duplica pontos
+  gravity: 6,  // força gravidade invertida
 };
 
 type ObstacleBehavior = "static" | "wiggle" | "fall" | "slide" | "spin";
@@ -107,7 +110,8 @@ const DYN_BEHAV_CHANCE = 0.55;     // 55% usam comportamento dinâmico
 const PICKUP_CHANCE    = 0.25;     // 25% de chance de nascer 1 pickup após um obstáculo
 const PICKUP_W = 20, PICKUP_H = 20;
 
-// Combos
+// Bônus de estilo por “flip no limite”
+const FLIP_WINDOW = 0.25; // s
 
 type GameCanvasProps = {
   onGameOver: (score: number) => void;
@@ -137,7 +141,6 @@ export default function GameCanvas({
   // ===== estado do jogo em refs =====
   const scoreRef = useRef(0);
   const speedRef = useRef(SPEED_START);
-  const laneRef = useRef<Lane>("bottom");
   const obstaclesRef = useRef<Obstacle[]>([]);
   const pickupsRef = useRef<Pickup[]>([]);
   const nextSpawnDistRef = useRef(rand(SPAWN_MIN, SPAWN_MAX));
@@ -145,15 +148,23 @@ export default function GameCanvas({
   const stoppedRef = useRef(false);
   const notifiedRef = useRef(false);
 
+  // ===== GRAVIDADE COMO MECÂNICA CENTRAL =====
+  const gravityInvertedRef = useRef(false);     // estado alvo (baixo=false, topo=true)
+  const gravityFlipCooldownRef = useRef(0);     // cooldown anti-spam
+  const FLIP_COOLDOWN = 0.35;
+  // tween da posição do player entre chão (0) e teto (1)
+  const playerYAnimRef = useRef(0);             // alvo 0|1
+  const playerYAnimTRef = useRef(1);            // progresso 0..1 (começa “em sincronia”)
+  const FLIP_TWEEN_SECS = 0.22;
+  const lastFlipAtRef = useRef(-999);           // p/ bônus de flip no limite
+
   // power-ups ativos
   const ghostUntilRef = useRef(0);
   const cloneUntilRef = useRef(0);
-  const gravityUntilRef = useRef(0);
-  const gravityInvertedRef = useRef(false);
+  const gravityUntilRef = useRef(0);            // força invertida até expirar
 
-
-  // ===== assets (imagens) =====
-  const bgImgsRef = useRef<HTMLImageElement[] | null>(null);
+  // ===== assets (BG imagens/vídeos + sprites) =====
+  const bgMediaRef = useRef<(HTMLImageElement | HTMLVideoElement)[] | null>(null);
   const playerImgRef = useRef<HTMLImageElement | null>(null);
   const hydrantGreenRef = useRef<HTMLImageElement | null>(null);
   const hydrantRedRef = useRef<HTMLImageElement | null>(null);
@@ -162,9 +173,9 @@ export default function GameCanvas({
 
   // parallax + tema
   const bgOffRef = useRef(0);
-  const bgIdxRef = useRef(0); // tema atual
-  const bgPrevIdxRef = useRef(0); // tema anterior (p/ fade)
-  const bgFadeTRef = useRef(1); // 0..1 (1=sem transição)
+  const bgIdxRef = useRef(0);       // tema atual
+  const bgPrevIdxRef = useRef(0);   // tema anterior (p/ fade)
+  const bgFadeTRef = useRef(1);     // 0..1 (1=sem transição)
 
   // ===== áudio =====
   const explorationMusicRef = useRef<HTMLAudioElement | null>(null);
@@ -185,7 +196,6 @@ export default function GameCanvas({
   const resetStateRefs = () => {
     scoreRef.current = 0;
     speedRef.current = SPEED_START;
-    laneRef.current = "bottom";
     obstaclesRef.current = [];
     pickupsRef.current = [];
     nextSpawnDistRef.current = rand(SPAWN_MIN, SPAWN_MAX);
@@ -193,11 +203,17 @@ export default function GameCanvas({
     stoppedRef.current = false;
     notifiedRef.current = false;
 
+    // gravidade
+    gravityInvertedRef.current = false;
+    gravityFlipCooldownRef.current = 0;
+    playerYAnimRef.current = 0;
+    playerYAnimTRef.current = 1;
+    lastFlipAtRef.current = -999;
+
+    // power-ups
     ghostUntilRef.current = 0;
     cloneUntilRef.current = 0;
     gravityUntilRef.current = 0;
-    gravityInvertedRef.current = false;
-
 
     // fundo/tema
     bgOffRef.current = 0;
@@ -212,29 +228,59 @@ export default function GameCanvas({
     }
   };
 
-  // input: flip de pista
-  const flipLane = useCallback(() => {
+  // ===== INPUT: inverter gravidade =====
+  const flipGravity = useCallback(() => {
     if (stoppedRef.current) return;
-    laneRef.current = laneRef.current === "bottom" ? "top" : "bottom";
+    if (gravityFlipCooldownRef.current > 0) return;
+
+    // Se power-up GRAVITY estiver ativo, mantenha invertido (não permite desinverter)
+    const powerUpForcing = nowSec() < gravityUntilRef.current;
+    if (powerUpForcing && gravityInvertedRef.current) return;
+
+    gravityInvertedRef.current = !gravityInvertedRef.current;
+    playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0; // alvo do tween
+    playerYAnimTRef.current = 0;
+    gravityFlipCooldownRef.current = FLIP_COOLDOWN;
+    lastFlipAtRef.current = nowSec();
   }, []);
 
-  /** ===== carregar imagens ===== */
+  /** ===== carregar BG (imagem/vídeo) e sprites ===== */
   useEffect(() => {
     let disposed = false;
-    const toLoad: HTMLImageElement[] = [];
+    const toLoad: (HTMLImageElement | HTMLVideoElement)[] = [];
 
-    function make(src: string) {
+    function loadImage(src: string) {
       const img = new Image();
       img.src = src;
       toLoad.push(img);
       return img;
     }
+    function createVideo(src: string, loop = true) {
+      const v = document.createElement("video");
+      v.src = src;
+      v.loop = loop;
+      v.muted = true;
+      (v as any).playsInline = true;
+      v.preload = "auto";
+      // não damos play aqui; tocamos quando o tema entra
+      toLoad.push(v);
+      return v;
+    }
 
     // BGs
-    const bgImgs = BG_SRCS.map(make);
-    bgImgsRef.current = bgImgs;
+    const bgMedia = BG_ITEMS.map((item) =>
+      item.type === "image" ? loadImage(item.src) : createVideo(item.src, item.loop ?? true)
+    );
+    bgMediaRef.current = bgMedia;
 
-    // Demais assets
+    // Sprites
+    const others: HTMLImageElement[] = [];
+    function make(src: string) {
+      const img = new Image();
+      img.src = src;
+      others.push(img);
+      return img;
+    }
     playerImgRef.current = make(PLAYER_SRC);
     hydrantGreenRef.current = make(HYDRANT_GREEN_SRC);
     hydrantRedRef.current = make(HYDRANT_RED_SRC);
@@ -243,22 +289,32 @@ export default function GameCanvas({
     let loaded = 0;
     const done = () => {
       loaded += 1;
-      if (!disposed && loaded === toLoad.length) setAssetsReady(true);
+      if (!disposed && loaded === toLoad.length + others.length) setAssetsReady(true);
     };
 
-    toLoad.forEach((img) => {
-      if (img.complete) done();
-      else {
-        img.addEventListener("load", done);
-        img.addEventListener("error", done); // não travar se falhar
+    [...bgMedia, ...others].forEach((m) => {
+      if (m instanceof HTMLImageElement) {
+        if (m.complete) done();
+        else {
+          m.addEventListener("load", done);
+          m.addEventListener("error", done);
+        }
+      } else {
+        const onMeta = () => { m.removeEventListener("loadedmetadata", onMeta); done(); };
+        m.addEventListener("loadedmetadata", onMeta);
+        m.addEventListener("error", done);
       }
     });
 
     return () => {
       disposed = true;
-      toLoad.forEach((img) => {
-        img.removeEventListener("load", done);
-        img.removeEventListener("error", done);
+      [...bgMedia, ...others].forEach((m) => {
+        if (m instanceof HTMLImageElement) {
+          m.removeEventListener("load", done);
+          m.removeEventListener("error", done);
+        } else {
+          try { m.pause(); } catch {}
+        }
       });
     };
   }, []);
@@ -290,6 +346,14 @@ export default function GameCanvas({
         if (ctx && ctx.state === "suspended") await ctx.resume();
         audioUnlockedRef.current = true;
         crossfadeTo("exploration");
+        // tenta tocar vídeo do tema atual (se for vídeo)
+        const media = bgMediaRef.current;
+        if (media) {
+          const cur = media[bgIdxRef.current];
+          if (cur instanceof HTMLVideoElement) {
+            try { cur.currentTime = 0; await cur.play(); } catch {}
+          }
+        }
       } catch {}
     };
 
@@ -301,6 +365,14 @@ export default function GameCanvas({
       } catch {}
       audioUnlockedRef.current = true;
       crossfadeTo("exploration");
+      // idem: tentar vídeo quando destravar
+      const media = bgMediaRef.current;
+      if (media) {
+        const cur = media[bgIdxRef.current];
+        if (cur instanceof HTMLVideoElement) {
+          try { cur.currentTime = 0; await cur.play(); } catch {}
+        }
+      }
       window.removeEventListener("pointerdown", unlockAudio);
       window.removeEventListener("keydown", unlockAudio);
     };
@@ -445,7 +517,9 @@ export default function GameCanvas({
     if (kind === "clone")  cloneUntilRef.current  = Math.max(cloneUntilRef.current, end);
     if (kind === "gravity") {
       gravityUntilRef.current = Math.max(gravityUntilRef.current, end);
-      gravityInvertedRef.current = true;
+      gravityInvertedRef.current = true; // força invertido
+      playerYAnimRef.current = 1;        // anima rumo ao teto
+      playerYAnimTRef.current = 0;
     }
   }
   function isGhost()   { return nowSec() < ghostUntilRef.current; }
@@ -456,6 +530,20 @@ export default function GameCanvas({
   const step = (dt: number) => {
     if (lockedRef.current) return;
     const dx = speedRef.current * dt;
+
+    // cooldown do flip
+    if (gravityFlipCooldownRef.current > 0) {
+      gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
+    }
+    // expira gravidade invertida do power-up (volta ao estado manual)
+    if (!isGravity() && gravityInvertedRef.current && playerYAnimRef.current !== (gravityInvertedRef.current ? 1 : 0)) {
+      // nada — o alvo já é coerente; mantemos o que o jogador escolheu no último flip
+    }
+
+    // tween entre chão (0) e teto (1)
+    if (playerYAnimTRef.current < 1) {
+      playerYAnimTRef.current = Math.min(1, playerYAnimTRef.current + dt / FLIP_TWEEN_SECS);
+    }
 
     // parallax
     bgOffRef.current += dx * BG_SPEED_FACTOR;
@@ -469,18 +557,20 @@ export default function GameCanvas({
       if (o.t == null) o.t = 0;
       o.t += dt;
 
-      // colisão (caixa simples) — respeita "gravidade invertida" e ghost/fake
+      // colisão (caixa simples) — usa gravidade/tween
       const TOP_LINE_Y = CEILING_Y + PLAYER_H;
 
-      // se gravidade invertida, invertimos a leitura da lane do player
-      const playerLane = gravityInvertedRef.current
-        ? (laneRef.current === "top" ? "bottom" : "top")
-        : laneRef.current;
+      // posição contínua do player (0..1)
+      const anim = playerYAnimRef.current; // alvo
+      const tAnim = playerYAnimTRef.current; // progresso
+      const ease = (x: number) => 1 - Math.pow(1 - x, 2);
+      const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
+      const playerLaneIsTop = blend > 0.5;
 
-      const playerY = playerLane === "bottom" ? GROUND_Y - PLAYER_H : TOP_LINE_Y;
+      const playerY = playerLaneIsTop ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
       const sameLane =
-        (o.lane === "bottom" && playerY === GROUND_Y - PLAYER_H) ||
-        (o.lane === "top" && playerY === TOP_LINE_Y);
+        (o.lane === "bottom" && !playerLaneIsTop) ||
+        (o.lane === "top" && playerLaneIsTop);
       const overlapX = o.x < PLAYER_X + PLAYER_W && o.x + HYDRANT_W > PLAYER_X;
 
       if (!o.fake && !isGhost() && sameLane && overlapX) {
@@ -507,19 +597,22 @@ export default function GameCanvas({
 
       // pontua quando o obstáculo passou a posição do player
       if (!o.passed && o.x + HYDRANT_W < PLAYER_X) {
-      o.passed = true;
-      const dodged = playerLane !== o.lane;
+        o.passed = true;
+        const dodged = (playerLaneIsTop ? "top" : "bottom") !== o.lane;
 
-      if (dodged || isGhost() || o.fake) {
-        // pontos: 1 (ou 2 se clone estiver ativo), sem multiplicador
-        const gain = 1 + (hasClone() ? 1 : 0);
-        scoreRef.current += gain;
+        if (dodged || isGhost() || o.fake) {
+          // pontos: 1 (ou 2 se clone estiver ativo)
+          let gain = 1 + (hasClone() ? 1 : 0);
+          // bônus por flip no limite
+          if (Math.abs(nowSec() - lastFlipAtRef.current) <= FLIP_WINDOW) {
+            gain += 1;
+          }
+          scoreRef.current += gain;
 
-        speedRef.current = Math.min(SPEED_MAX, speedRef.current + SPEED_ADD);
-        evaluateMusicByScore(scoreRef.current);
+          speedRef.current = Math.min(SPEED_MAX, speedRef.current + SPEED_ADD);
+          evaluateMusicByScore(scoreRef.current);
+        }
       }
-    }
-
     }
 
     // remove fora da tela
@@ -540,10 +633,13 @@ export default function GameCanvas({
       p.x -= dx;
 
       const TOP_LINE_Y = CEILING_Y + PLAYER_H;
-      const playerLane = gravityInvertedRef.current
-        ? (laneRef.current === "top" ? "bottom" : "top")
-        : laneRef.current;
-      const playerY = playerLane === "bottom" ? GROUND_Y - PLAYER_H : TOP_LINE_Y;
+
+      const anim = playerYAnimRef.current;
+      const tAnim = playerYAnimTRef.current;
+      const ease = (x: number) => 1 - Math.pow(1 - x, 2);
+      const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
+      const playerLaneIsTop = blend > 0.5;
+      const playerY = playerLaneIsTop ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
 
       const pY = p.lane === "bottom" ? GROUND_Y - PICKUP_H : TOP_LINE_Y;
       const overlapX = p.x < PLAYER_X + PLAYER_W && p.x + PICKUP_W > PLAYER_X;
@@ -556,20 +652,39 @@ export default function GameCanvas({
     }
     pickupsRef.current = ps.filter((p) => p.x + PICKUP_W > -60 && !p.taken);
 
-    // expira gravidade invertida
-    if (gravityInvertedRef.current && !isGravity()) {
-      gravityInvertedRef.current = false;
-    }
-
     // ===== PROGRESSÃO DE TEMA + CROSSFADE =====
-    const totalBgs = bgImgsRef.current?.length ?? 1;
+    const totalBgs = bgMediaRef.current?.length ?? 1;
     const desiredIdx = Math.floor(scoreRef.current / THEME_INTERVAL);
     const targetIdx = totalBgs > 0 ? desiredIdx % totalBgs : 0;
 
     if (targetIdx !== bgIdxRef.current) {
-      bgPrevIdxRef.current = bgIdxRef.current;
+      const prev = bgIdxRef.current;
+      bgPrevIdxRef.current = prev;
       bgIdxRef.current = targetIdx;
       bgFadeTRef.current = 0; // começa o fade
+
+      // vídeos: pausa o anterior (após o fade) e toca o novo
+      const media = bgMediaRef.current;
+      if (media && media[prev] instanceof HTMLVideoElement) {
+        const v = media[prev] as HTMLVideoElement;
+        setTimeout(() => { try { v.pause(); } catch {} }, BG_FADE_SECS * 1000 + 60);
+      }
+      if (media && media[targetIdx] instanceof HTMLVideoElement) {
+        const v = media[targetIdx] as HTMLVideoElement;
+        try {
+          v.currentTime = 0;
+          v.play();
+        } catch {}
+      }
+
+      // ===== TOCAR DE VEZ EM QUANDO (opcional):
+      // Se quiser que o vídeo toque só às vezes, em vez de loopar:
+      // - Troque o BG_ITEMS do vídeo para { type:"video", src:"/videos/bg3.mp4", loop:false }
+      // - E aqui você pode dar play com uma chance:
+      // if (media && media[targetIdx] instanceof HTMLVideoElement) {
+      //   const v = media[targetIdx] as HTMLVideoElement;
+      //   if (v.paused && Math.random() < 0.3) { try { v.currentTime = 0; v.play(); } catch {} }
+      // }
     }
 
     if (bgFadeTRef.current < 1) {
@@ -586,6 +701,14 @@ export default function GameCanvas({
 
   // render
   const draw = (ctx: CanvasRenderingContext2D) => {
+    ctx.save();
+
+    // toque visual: leve inclinação quando invertido
+    const tilt = gravityInvertedRef.current ? -0.03 : 0; // ~1.7°
+    ctx.translate(WIDTH / 2, HEIGHT / 2);
+    ctx.rotate(tilt);
+    ctx.translate(-WIDTH / 2, -HEIGHT / 2);
+
     drawBackground(ctx);
 
     // linhas guia (sutileza)
@@ -595,13 +718,15 @@ export default function GameCanvas({
     line(ctx, 0, TOP_LINE_Y, WIDTH, TOP_LINE_Y);
     line(ctx, 0, GROUND_Y, WIDTH, GROUND_Y);
 
-    // player (considera gravidade invertida)
-    const isTop = (gravityInvertedRef.current
-      ? (laneRef.current === "bottom")
-      : (laneRef.current === "top"));
+    // player com tween
+    const anim = playerYAnimRef.current;
+    const tAnim = playerYAnimTRef.current;
+    const ease = (x: number) => 1 - Math.pow(1 - x, 2);
+    const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
 
-    const player_base_y = isTop ? TOP_LINE_Y : GROUND_Y;
-    const player_draw_y = isTop ? player_base_y : player_base_y - PLAYER_H;
+    const playerLaneIsTop = blend > 0.5;
+    const player_base_y = playerLaneIsTop ? TOP_LINE_Y : GROUND_Y;
+    const player_draw_y = playerLaneIsTop ? player_base_y : player_base_y - PLAYER_H;
 
     const ghost = isGhost();
     if (ghost) { ctx.save(); ctx.globalAlpha = 0.5; }
@@ -612,16 +737,16 @@ export default function GameCanvas({
       player_draw_y,
       PLAYER_W,
       PLAYER_H,
-      isTop,
+      playerLaneIsTop,
       "#ffd166"
     );
     if (ghost) ctx.restore();
 
-    // clone na pista oposta
+    // clone na “pista” oposta
     if (hasClone()) {
       ctx.save();
       ctx.globalAlpha = 0.6;
-      const cloneIsTop = !isTop;
+      const cloneIsTop = !playerLaneIsTop;
       const clone_base_y = cloneIsTop ? TOP_LINE_Y : GROUND_Y;
       const clone_draw_y = cloneIsTop ? clone_base_y : clone_base_y - PLAYER_H;
       drawFlippable(
@@ -682,19 +807,18 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-
-
     // HUD
     ctx.fillStyle = "black";
     ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas";
     ctx.fillText(`Score: ${scoreRef.current}`, 16, 24);
     ctx.fillText(`Vel: ${Math.round(speedRef.current)} px/s`, 16, 42);
-    
+
+    ctx.restore(); // fim do tilt
   };
 
-  // fundo com crossfade e tile horizontal (parallax)
+  // fundo com crossfade e tile horizontal (parallax) — suporta IMG e VÍDEO
   const drawBackground = (ctx: CanvasRenderingContext2D) => {
-    const bgs = bgImgsRef.current;
+    const bgs = bgMediaRef.current;
     if (!bgs || bgs.length === 0) {
       ctx.fillStyle = "#0b1020";
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -703,13 +827,13 @@ export default function GameCanvas({
 
     const idxA = bgPrevIdxRef.current;
     const idxB = bgIdxRef.current;
-    const imgA = bgs[idxA];
-    const imgB = bgs[idxB];
+    const mA = bgs[idxA];
+    const mB = bgs[idxB];
     const t = bgFadeTRef.current; // 0..1
 
-    const drawCover = (img: HTMLImageElement, alpha: number, offsetX = 0) => {
-      const iw = img.naturalWidth || img.width;
-      const ih = img.naturalHeight || img.height;
+    const drawCover = (el: HTMLImageElement | HTMLVideoElement, alpha: number) => {
+      const iw = (el as any).videoWidth || (el as any).naturalWidth || (el as any).width;
+      const ih = (el as any).videoHeight || (el as any).naturalHeight || (el as any).height;
       if (!iw || !ih) return;
 
       const canvasRatio = WIDTH / HEIGHT;
@@ -732,18 +856,20 @@ export default function GameCanvas({
 
       ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.drawImage(img, 0, 0, iw, ih, dx + offsetX, dy, drawW, drawH);
 
+      ctx.drawImage(el as any, 0, 0, iw, ih, dx, dy, drawW, drawH);
+
+      // tile horizontal
       if (dx > 0) {
-        ctx.drawImage(img, 0, 0, iw, ih, dx - drawW + offsetX, dy, drawW, drawH);
+        ctx.drawImage(el as any, 0, 0, iw, ih, dx - drawW, dy, drawW, drawH);
       } else if (dx + drawW < WIDTH) {
-        ctx.drawImage(img, 0, 0, iw, ih, dx + drawW + offsetX, dy, drawW, drawH);
+        ctx.drawImage(el as any, 0, 0, iw, ih, dx + drawW, dy, drawW, drawH);
       }
       ctx.restore();
     };
 
-    if (imgA && imgA.complete && t < 1) drawCover(imgA, 1 - t);
-    if (imgB && imgB.complete) drawCover(imgB, t);
+    if (mA && t < 1) drawCover(mA, 1 - t);
+    if (mB) drawCover(mB, t);
     else {
       ctx.fillStyle = "#0b1020";
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -756,12 +882,12 @@ export default function GameCanvas({
       if (e.code === "Space" || e.code === "ArrowUp") {
         e.preventDefault();
         if (lockedRef.current) { onRequireLogin?.(); return; }
-        flipLane();
+        flipGravity();
       }
     };
     const onClick = () => {
       if (lockedRef.current) { onRequireLogin?.(); return; }
-      flipLane();
+      flipGravity();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", onClick);
@@ -769,7 +895,7 @@ export default function GameCanvas({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onClick);
     };
-  }, [flipLane, onRequireLogin]);
+  }, [flipGravity, onRequireLogin]);
 
   /** ======== FULLSCREEN + LANDSCAPE ======== */
   const enterFullscreenAndLandscape = async () => {
@@ -853,6 +979,14 @@ export default function GameCanvas({
               try { audioCtxRef.current?.resume(); } catch {}
               audioUnlockedRef.current = true;
               crossfadeTo("exploration");
+              // tenta vídeo se tema atual for vídeo
+              const media = bgMediaRef.current;
+              if (media) {
+                const cur = media[bgIdxRef.current];
+                if (cur instanceof HTMLVideoElement) {
+                  try { cur.currentTime = 0; cur.play(); } catch {}
+                }
+              }
             }
           }}
           className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
