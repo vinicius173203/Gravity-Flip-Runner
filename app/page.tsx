@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useMonadGamesWallet } from "@/hooks/useMonadGamesWallet";
-import GameCanvas from "@/components/GameCanvas";
+import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
 import GlobalLeaderboard from "@/components/GlobalLeaderboard";
 
 const REG_URL = "https://monad-games-id-site.vercel.app/";
@@ -18,6 +18,7 @@ function shorten(addr?: string | null) {
 
 export default function Home() {
   const { login, logout, authenticated, ready } = usePrivy();
+  const gameRef = useRef<GameCanvasHandle | null>(null);
 
   // normaliza o retorno do hook
   const mgw = useMonadGamesWallet() as any;
@@ -324,9 +325,11 @@ const handleSubmit = async (score: number) => {
               </div>
             </div>
 
+
             <div className="relative">
               {/* Canvas */}
               <GameCanvas
+              ref={gameRef}
                 key={gameKey}
                 playerScale={1.6}
                 onStatsChange={({ score, speed }) => {
@@ -395,6 +398,19 @@ const handleSubmit = async (score: number) => {
                     </div>
                     <div className="text-lg font-bold text-yellow-300 drop-shadow">{highScore}</div>
                   </div>
+                   {/* Botão Selecionar personagem (desktop), MESMO QUADRO após High Score */}
+                    <button
+                      onClick={() => gameRef.current?.openCharSelect()}
+                      disabled={lastScore === null}
+                      className={`ml-3 px-3 py-2 rounded-2xl text-white text-sm backdrop-blur border
+                        pointer-events-auto
+                        ${lastScore !== null
+                        ? "bg-black/50 border-white/15 hover:bg-black/70"
+                          : "bg-black/30 border-white/10 cursor-not-allowed opacity-60"}`}
+                    title={lastScore !== null ? "Selecionar personagem" : "Disponível após o fim da partida"}
+                    >
+                      👤 Select character
+                  </button>
                 </div>
               </div>
             </div>

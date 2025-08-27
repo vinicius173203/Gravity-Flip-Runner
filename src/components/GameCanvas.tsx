@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 
 /** ====== CONFIG ====== */
 
@@ -30,10 +30,17 @@ const SPAWN_MIN = 500; // px
 const SPAWN_MAX = 800; // px
 
 /** Assets (ajuste as extensões conforme seus arquivos) */
-const PLAYER_SRC = "/images/player.png"; // troque se for .jpg
 const HYDRANT_GREEN_SRC = "/images/h1.png";
 const HYDRANT_RED_SRC = "/images/h2.png";
 const HYDRANT_BLUE_SRC = "/images/h3.png";
+
+/** Personagens disponíveis para seleção (adicione mais conforme necessário) */
+type Character = { name: string; src: string };
+const CHARACTERS: Character[] = [
+  { name: "Pulse", src: "/images/player.png" }, // Seu personagem atual
+  { name: "Riff", src: "/images/player2.png" }, // Adicione imagens reais aqui
+  { name: "Melody", src: "/images/player3.png" }, // Placeholder; substitua
+];
 
 /** Backgrounds em sequência (ordem = progressão) — agora com vídeo no slot do bg3 */
 type BgItem =
@@ -121,15 +128,17 @@ type GameCanvasProps = {
   locked?: boolean;
   onRequireLogin?: () => void;
 };
-
-export default function GameCanvas({
+ export type GameCanvasHandle = {
+  openCharSelect: () => void;
+ };
+const GameCanvas = ({
   onGameOver,
   playerScale = 1.6,
   onStatsChange,
   onRestartRequest,
   locked = false,
   onRequireLogin,
-}: GameCanvasProps) {
+}: GameCanvasProps, ref: React.Ref<GameCanvasHandle>) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -137,6 +146,12 @@ export default function GameCanvas({
 
   // HUD
   const [gameOver, setGameOver] = useState(false);
+
+  // Estado para seleção de personagem e início do jogo
+  const [gameStarted, setGameStarted] = useState(false);
+  const [showCharSelect, setShowCharSelect] = useState(true); // Mostra seleção apenas na primeira vez
+  const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
+  const [highScore, setHighScore] = useState(0); // High score local
 
   // ===== estado do jogo em refs =====
   const scoreRef = useRef(0);
@@ -160,8 +175,10 @@ export default function GameCanvas({
 
   // power-ups ativos
   const ghostUntilRef = useRef(0);
+  const wasGhostRef = useRef(false);
   const cloneUntilRef = useRef(0);
-  const gravityUntilRef = useRef(0);            // força invertida até expirar
+  const gravityUntilRef = useRef(0);    
+  const wasGravityRef = useRef(false);        // força invertida até expirar
 
   // ===== assets (BG imagens/vídeos + sprites) =====
   const bgMediaRef = useRef<(HTMLImageElement | HTMLVideoElement)[] | null>(null);
@@ -192,6 +209,38 @@ export default function GameCanvas({
 
   const lockedRef = useRef(!!locked);
   useEffect(() => { lockedRef.current = !!locked; }, [locked]);
+
+  // Carregar high score e personagem selecionado do localStorage
+  useEffect(() => {
+    const savedHighScore = localStorage.getItem("highScore");
+    if (savedHighScore) {
+      setHighScore(parseInt(savedHighScore, 10));
+    }
+
+     const savedChar = localStorage.getItem("selectedCharacter");
+if (savedChar) {
+  const char = JSON.parse(savedChar) as Character;
+  setSelectedCharacter(char);
+} else {
+  // usa o primeiro da lista como padrão da “primeira partida”
+  setSelectedCharacter(CHARACTERS[0]);
+}
+// nunca abre seleção automaticamente; já começa a partida
+setShowCharSelect(false);
+setGameStarted(true);
+  }, []);
+
+  // Salvar high score quando mudar
+  useEffect(() => {
+    localStorage.setItem("highScore", highScore.toString());
+  }, [highScore]);
+
+  // Salvar personagem selecionado
+  useEffect(() => {
+    if (selectedCharacter) {
+      localStorage.setItem("selectedCharacter", JSON.stringify(selectedCharacter));
+    }
+  }, [selectedCharacter]);
 
   const resetStateRefs = () => {
     scoreRef.current = 0;
@@ -246,6 +295,8 @@ export default function GameCanvas({
 
   /** ===== carregar BG (imagem/vídeo) e sprites ===== */
   useEffect(() => {
+    if (!selectedCharacter) return;
+
     let disposed = false;
     const toLoad: (HTMLImageElement | HTMLVideoElement)[] = [];
 
@@ -281,7 +332,8 @@ export default function GameCanvas({
       others.push(img);
       return img;
     }
-    playerImgRef.current = make(PLAYER_SRC);
+    // Carrega o personagem selecionado dinamicamente
+    playerImgRef.current = make(selectedCharacter.src);
     hydrantGreenRef.current = make(HYDRANT_GREEN_SRC);
     hydrantRedRef.current = make(HYDRANT_RED_SRC);
     hydrantBlueRef.current = make(HYDRANT_BLUE_SRC);
@@ -317,7 +369,7 @@ export default function GameCanvas({
         }
       });
     };
-  }, []);
+  }, [selectedCharacter]);
 
   /** ===== carregar áudio ===== */
   useEffect(() => {
@@ -479,8 +531,10 @@ export default function GameCanvas({
     if (desired !== currentMusicRef.current) crossfadeTo(desired);
   }
 
-  // loop principal
+  // loop principal (só roda se o jogo estiver iniciado e assets prontos)
   useEffect(() => {
+    if (!gameStarted || !assetsReady) return;
+
     resetStateRefs();
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
@@ -507,7 +561,7 @@ export default function GameCanvas({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetsReady]);
+  }, [assetsReady, gameStarted]);
 
   /** ===== POWER-UPS helpers ===== */
   function nowSec() { return performance.now() / 1000; }
@@ -535,10 +589,19 @@ export default function GameCanvas({
     if (gravityFlipCooldownRef.current > 0) {
       gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
     }
-    // expira gravidade invertida do power-up (volta ao estado manual)
-    if (!isGravity() && gravityInvertedRef.current && playerYAnimRef.current !== (gravityInvertedRef.current ? 1 : 0)) {
-      // nada — o alvo já é coerente; mantemos o que o jogador escolheu no último flip
+    // --- liberar flip imediatamente quando o ghost termina ---
+    const ghostActive = isGhost();
+    if (wasGhostRef.current && !ghostActive) {
+      // o ghost acabou neste frame → zera o cooldown para não "travar" o primeiro flip
+      gravityFlipCooldownRef.current = 0;
     }
+    wasGhostRef.current = ghostActive;
+    // --- liberar flip imediatamente quando o GRAVITY termina ---
+      const gravActive = isGravity();
+      if (wasGravityRef.current && !gravActive) {
+        gravityFlipCooldownRef.current = 0;
+      }
+      wasGravityRef.current = gravActive;
 
     // tween entre chão (0) e teto (1)
     if (playerYAnimTRef.current < 1) {
@@ -577,6 +640,9 @@ export default function GameCanvas({
         if (!stoppedRef.current) {
           stoppedRef.current = true;
           setGameOver(true);
+          if (scoreRef.current > highScore) {
+            setHighScore(scoreRef.current);
+          }
           ["exploration", "battle", "boss"].forEach((k) => {
             const el =
               k === "exploration"
@@ -803,6 +869,7 @@ export default function GameCanvas({
     ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas";
     ctx.fillText(`Score: ${scoreRef.current}`, 16, 24);
     ctx.fillText(`Vel: ${Math.round(speedRef.current)} px/s`, 16, 42);
+    ctx.fillText(`High: ${highScore}`, 16, 60);
 
     ctx.restore(); // fim do tilt
   };
@@ -867,8 +934,10 @@ export default function GameCanvas({
     }
   };
 
-  // inputs globais
+  // inputs globais (só ativos após início do jogo)
   useEffect(() => {
+    if (!gameStarted) return;
+
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space" || e.code === "ArrowUp") {
         e.preventDefault();
@@ -886,7 +955,7 @@ export default function GameCanvas({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onClick);
     };
-  }, [flipGravity, onRequireLogin]);
+  }, [flipGravity, onRequireLogin, gameStarted]);
 
   /** ======== FULLSCREEN + LANDSCAPE ======== */
   const enterFullscreenAndLandscape = async () => {
@@ -910,23 +979,82 @@ export default function GameCanvas({
     } catch {}
   };
 
+  // Função para iniciar o jogo com o personagem selecionado
+  const startGame = (char?: Character) => {
+    if (char) {
+      setSelectedCharacter(char);
+    }
+     resetStateRefs();
+    setShowCharSelect(false);
+    setGameStarted(true);
+    // Carrega o playerImgRef com o src selecionado (já feito no useEffect de assets)
+  };
+
+  // Função para reiniciar (não volta à seleção, usa o personagem atual)
+  const restartGame = () => {
+    resetStateRefs();
+    setGameStarted(true); // Mantém iniciado
+    setShowCharSelect(false); // Não mostra seleção
+    onRestartRequest?.();
+  };
+
+  // Abrir seleção de personagem (só antes de iniciar ou após game over)
+  const openCharSelect = () => {
+    if (!gameStarted || gameOver) {
+      setShowCharSelect(true);
+    }
+  };
+  + // expõe openCharSelect para o pai
+useImperativeHandle(ref, () => ({
+  openCharSelect,
+ }), [gameOver, gameStarted]);
+
   return (
     <div
       ref={containerRef}
       className="relative w-full max-w-4xl mx-auto"
       style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }}
     >
-      {/* Canvas */}
-      <canvas
-        ref={canvasRef}
-        width={WIDTH}
-        height={HEIGHT}
-        className={`w-full h-auto rounded-2xl border border-white/10 ${gameOver ? "opacity-90" : "opacity-100"}`}
-        style={{ background: "rgba(0,0,0,0.5)" }}
-      />
+      {/* Tela de seleção de personagem (responsiva: coluna em mobile, grid em desktop) */}
+      {showCharSelect && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md rounded-2xl z-10 p-4">
+          <h2 className="text-white text-2xl font-bold mb-6">Escolha seu Personagem</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-md">
+            {CHARACTERS.map((char) => (
+              <button
+                key={char.src}
+                onClick={() => {
+                  startGame(char);
+                }}
+                className={`flex flex-col items-center p-4 rounded-xl bg-white/10 border ${
+                  selectedCharacter?.src === char.src ? "border-white/50" : "border-white/20"
+                } hover:bg-white/20 transition-all`}
+              >
+                <img
+                  src={char.src}
+                  alt={char.name}
+                  className="w-24 h-24 object-contain mb-2" // Tamanho touch-friendly
+                />
+                <span className="text-white text-base">{char.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Canvas (só visível se houver personagem selecionado) */}
+      {selectedCharacter && (
+        <canvas
+          ref={canvasRef}
+          width={WIDTH}
+          height={HEIGHT}
+          className={`w-full h-auto rounded-2xl border border-white/10 ${gameOver ? "opacity-90" : "opacity-100"} ${showCharSelect ? "hidden" : ""}`}
+          style={{ background: "rgba(0,0,0,0.5)" }}
+        />
+      )}
 
       {/* Overlay de login quando travado */}
-      {locked && (
+      {locked && gameStarted && (
         <div className="absolute inset-0 flex items-center justify-center">
           <button
             onPointerDown={(e) => e.stopPropagation()}
@@ -946,7 +1074,7 @@ export default function GameCanvas({
       {gameOver && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <button
-            onClick={() => { resetStateRefs(); onRestartRequest?.(); }}
+            onClick={restartGame}
             className="pointer-events-auto px-5 py-3 rounded-2xl bg-white/15 text-white text-base backdrop-blur border border-white/20 hover:bg-white/25 shadow-lg"
             title="Jogar novamente"
           >
@@ -956,46 +1084,70 @@ export default function GameCanvas({
       )}
 
       {/* Toolbar (top-right) */}
-      <div className="absolute top-2 right-2 flex items-center gap-2">
-        <button
-          onClick={enterFullscreenAndLandscape}
-          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
-          title="Tela cheia"
-        >
-          ⛶
-        </button>
-        <button
-          onClick={() => {
-            if (!audioUnlockedRef.current) {
-              try { audioCtxRef.current?.resume(); } catch {}
-              audioUnlockedRef.current = true;
-              crossfadeTo("exploration");
-              // tenta vídeo se tema atual for vídeo
-              const media = bgMediaRef.current;
-              if (media) {
-                const cur = media[bgIdxRef.current];
-                if (cur instanceof HTMLVideoElement) {
-                  try { cur.currentTime = 0; cur.play(); } catch {}
+      {gameStarted && !showCharSelect && (
+        <div className="absolute top-2 right-2 flex items-center gap-2">
+          <button
+            onClick={enterFullscreenAndLandscape}
+            className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+            title="Tela cheia"
+          >
+            ⛶
+          </button>
+          <button
+            onClick={() => {
+              if (!audioUnlockedRef.current) {
+                try { audioCtxRef.current?.resume(); } catch {}
+                audioUnlockedRef.current = true;
+                crossfadeTo("exploration");
+                // tenta vídeo se tema atual for vídeo
+                const media = bgMediaRef.current;
+                if (media) {
+                  const cur = media[bgIdxRef.current];
+                  if (cur instanceof HTMLVideoElement) {
+                    try { cur.currentTime = 0; cur.play(); } catch {}
+                  }
                 }
               }
-            }
-          }}
-          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
-          title="Ativar som"
-        >
-          🔊
-        </button>
-        <button
-          onClick={exitFullscreen}
-          className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
-          title="Sair da tela cheia"
-        >
-          ↩︎
-        </button>
-      </div>
+            }}
+            className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+            title="Ativar som"
+          >
+            🔊
+          </button>
+          <button
+            onClick={exitFullscreen}
+            className="px-3 py-2 rounded-xl bg-black/50 text-white text-sm backdrop-blur border border-white/10 hover:bg-black/70"
+            title="Sair da tela cheia"
+          >
+            ↩︎
+          </button>
+        </div>
+      )}
+
+      {/* High Score e Botão de Troca de Personagem (top-left, visível quando não jogando ou game over) */}
+      {/* Top-left HUD: botão Selecionar + High Score */}
+        {!showCharSelect && (
+          <div className="absolute top-2 left-2 flex items-center gap-2">
+            <button
+              onClick={gameOver ? openCharSelect : undefined}
+              disabled={!gameOver}
+              className={`px-3 py-2 rounded-2xl text-white text-sm backdrop-blur border border-white/10
+                ${gameOver
+                  ? "bg-black/50 hover:bg-black/70 cursor-pointer opacity-100"
+                  : "bg-black/30 cursor-not-allowed opacity-50"}`}
+              title={gameOver ? "Selecionar personagem" : "Disponível após o fim da partida"}
+            >
+              👤 Selecionar personagem
+            </button>
+            <div className="px-3 py-2 rounded-2xl bg-black/50 text-white text-sm backdrop-blur border border-white/10">
+              High Score: {highScore}
+            </div>
+          </div>
+        )}
     </div>
   );
 }
+export default forwardRef<GameCanvasHandle, GameCanvasProps>(GameCanvas);
 
 /** ===== utils & desenho ===== */
 function rand(min: number, max: number) {
