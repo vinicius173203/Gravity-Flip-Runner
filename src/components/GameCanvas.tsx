@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
@@ -37,24 +36,23 @@ const HYDRANT_BLUE_SRC = "/images/h3.png";
 /** Personagens disponíveis para seleção (adicione mais conforme necessário) */
 type Character = { name: string; src: string };
 const CHARACTERS: Character[] = [
-  { name: "Pulse", src: "/images/player.png" }, // Seu personagem atual
-  { name: "Riff", src: "/images/player2.png" }, // Adicione imagens reais aqui
-  { name: "Melody", src: "/images/player3.png" }, // Placeholder; substitua
+  { name: "Pulse",  src: "/images/player.png"  },
+  { name: "Riff",   src: "/images/player2.png" },
+  { name: "Melody", src: "/images/player3.png" },
 ];
 
-/** Backgrounds em sequência (ordem = progressão) — agora com vídeo no slot do bg3 */
+/** Backgrounds em sequência (ordem = progressão) */
 type BgItem =
   | { type: "image"; src: string }
   | { type: "video"; src: string; loop?: boolean };
-//{ type: "video", src: "/videos/bg5.mp4", loop: true }, // bg3 como vídeo
+
 const BG_ITEMS: BgItem[] = [
   { type: "image", src: "/images/bg1.png" },
   { type: "image", src: "/images/bg2.png" },
   { type: "image", src: "/images/bg3.png" },
-   { type: "image", src: "/images/bg4.png"},
-   { type: "image", src: "/images/bg6.png" },
-   { type: "image", src: "/images/bg7.png" },
-  
+  { type: "image", src: "/images/bg4.png"},
+  { type: "image", src: "/images/bg6.png" },
+  { type: "image", src: "/images/bg7.png" },
   { type: "image", src: "/images/bg8.png" },
 ];
 
@@ -86,12 +84,13 @@ type Lane = "top" | "bottom";
 type HydrantColor = "green" | "red" | "blue";
 type MusicKind = keyof typeof MUSIC;
 
-/** ===== POWER-UPS / PICKUPS ===== */
-type PowerUpKind = "ghost" | "clone" | "gravity";
+/** ===== POWER-UPS / PICKUPS =====
+ * Removido: 'gravity'. Mantém apenas 'ghost' e 'clone'.
+ */
+type PowerUpKind = "ghost" | "clone";
 const PU_DURATION: Record<PowerUpKind, number> = {
   ghost: 6,    // atravessa tudo
   clone: 8,    // duplica pontos
-  gravity: 6,  // força gravidade invertida
 };
 
 type ObstacleBehavior = "static" | "wiggle" | "fall" | "slide" | "spin";
@@ -122,6 +121,11 @@ const PICKUP_W = 20, PICKUP_H = 20;
 // Bônus de estilo por “flip no limite”
 const FLIP_WINDOW = 0.25; // s
 
+// Anti-reflip / UX do flip
+const FLIP_COOLDOWN = 0.12;           // cooldown leve
+const MIN_TWEEN_TO_REFLIP = 0.75;     // precisa concluir 75% do tween antes de aceitar outro flip
+const DUP_FLIP_GUARD_SECS = 0.18;     // guarda contra taps duplos muito próximos
+
 type GameCanvasProps = {
   onGameOver: (score: number) => void;
   playerScale?: number;
@@ -130,17 +134,110 @@ type GameCanvasProps = {
   locked?: boolean;
   onRequireLogin?: () => void;
 };
- export type GameCanvasHandle = {
+export type GameCanvasHandle = {
   openCharSelect: () => void;
- };
-const GameCanvas = ({
-  onGameOver,
-  playerScale = 1.6,
-  onStatsChange,
-  onRestartRequest,
-  locked = false,
-  onRequireLogin,
-}: GameCanvasProps, ref: React.Ref<GameCanvasHandle>) => {
+};
+
+/** ===== utils & desenho ===== */
+function rand(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function line(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
+/** Desenha imagem crua (sem translate/flip), ou retângulo fallback */
+function drawImageOrRect(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fallbackColor?: string
+) {
+  if (img && img.complete) {
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, x, y, w, h);
+  } else if (fallbackColor) {
+    ctx.fillStyle = fallbackColor;
+    ctx.fillRect(x, y, w, h);
+  }
+}
+/** Desenha imagem com opção de flip vertical (para pista superior) */
+function drawFlippable(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  flipVertical: boolean,
+  fallbackColor?: string
+) {
+  ctx.save();
+  if (flipVertical) {
+    ctx.translate(x, y + h);
+    ctx.scale(1, -1);
+  } else {
+    ctx.translate(x, y);
+  }
+  if (img && img.complete) {
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, 0, w, h);
+  } else if (fallbackColor) {
+    ctx.fillStyle = fallbackColor;
+    ctx.fillRect(0, 0, w, h);
+  }
+  ctx.restore();
+}
+
+/** Spawns */
+function spawnObstacle(): Obstacle {
+  const color = (["green", "red", "blue"] as HydrantColor[])[rand(0, 2)];
+  const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
+
+  const behaviors: ObstacleBehavior[] = ["wiggle", "fall", "slide", "spin"];
+  const behavior: ObstacleBehavior =
+    Math.random() < DYN_BEHAV_CHANCE ? behaviors[rand(0, behaviors.length - 1)] : "static";
+
+  const fake = Math.random() < FAKE_OBS_CHANCE;
+
+  return {
+    x: WIDTH + rand(0, 80),
+    lane,
+    passed: false,
+    color,
+    behavior,
+    t: 0,
+    fake,
+  };
+}
+
+function spawnPickup(): Pickup | null {
+  if (Math.random() > PICKUP_CHANCE) return null;
+  const kinds: PowerUpKind[] = ["ghost", "clone"]; // removido "gravity"
+  const kind = kinds[rand(0, kinds.length - 1)];
+  const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
+  return {
+    x: WIDTH + rand(120, 200),
+    lane,
+    kind,
+  };
+}
+
+/** ===== COMPONENTE ===== */
+function GameCanvas(
+  {
+    onGameOver,
+    playerScale = 1.6,
+    onStatsChange,
+    onRestartRequest,
+    locked = false,
+    onRequireLogin,
+  }: GameCanvasProps,
+  ref: React.Ref<GameCanvasHandle>
+) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -164,30 +261,21 @@ const GameCanvas = ({
   const lastTsRef = useRef<number | null>(null);
   const stoppedRef = useRef(false);
   const notifiedRef = useRef(false);
-  // refs novas
-  const gravGraceUntilRef = useRef(0);
-  const GRAV_END_GRACE = 1; // segundos de invulnerabilidade ao acabar gravity
-  const wantFlipRef = useRef(false);
-  const justFlippedAtRef = useRef(0); 
 
-
-
-  // ===== GRAVIDADE COMO MECÂNICA CENTRAL =====
+  // ===== GRAVIDADE (apenas manual) =====
   const gravityInvertedRef = useRef(false);     // estado alvo (baixo=false, topo=true)
   const gravityFlipCooldownRef = useRef(0);     // cooldown anti-spam
-  const FLIP_COOLDOWN = 0.01;
-  // tween da posição do player entre chão (0) e teto (1)
   const playerYAnimRef = useRef(0);             // alvo 0|1
   const playerYAnimTRef = useRef(1);            // progresso 0..1 (começa “em sincronia”)
   const FLIP_TWEEN_SECS = 0.22;
   const lastFlipAtRef = useRef(-999);           // p/ bônus de flip no limite
+  const wantFlipRef = useRef(false);
+  const justFlippedAtRef = useRef(0);
 
-  // power-ups ativos
+  // power-ups ativos (somente ghost/clone)
   const ghostUntilRef = useRef(0);
   const wasGhostRef = useRef(false);
   const cloneUntilRef = useRef(0);
-  const gravityUntilRef = useRef(0);    
-  const wasGravityRef = useRef(false);        // força invertida até expirar
 
   // ===== assets (BG imagens/vídeos + sprites) =====
   const bgMediaRef = useRef<(HTMLImageElement | HTMLVideoElement)[] | null>(null);
@@ -226,17 +314,17 @@ const GameCanvas = ({
       setHighScore(parseInt(savedHighScore, 10));
     }
 
-     const savedChar = localStorage.getItem("selectedCharacter");
-if (savedChar) {
-  const char = JSON.parse(savedChar) as Character;
-  setSelectedCharacter(char);
-} else {
-  // usa o primeiro da lista como padrão da “primeira partida”
-  setSelectedCharacter(CHARACTERS[0]);
-}
-// nunca abre seleção automaticamente; já começa a partida
-setShowCharSelect(false);
-setGameStarted(true);
+    const savedChar = localStorage.getItem("selectedCharacter");
+    if (savedChar) {
+      const char = JSON.parse(savedChar) as Character;
+      setSelectedCharacter(char);
+    } else {
+      setSelectedCharacter(CHARACTERS[0]);
+    }
+
+    // já começa a partida sem abrir seleção
+    setShowCharSelect(false);
+    setGameStarted(true);
   }, []);
 
   // Salvar high score quando mudar
@@ -261,7 +349,7 @@ setGameStarted(true);
     stoppedRef.current = false;
     notifiedRef.current = false;
 
-    // gravidade
+    // gravidade (manual)
     gravityInvertedRef.current = false;
     gravityFlipCooldownRef.current = 0;
     playerYAnimRef.current = 0;
@@ -271,7 +359,6 @@ setGameStarted(true);
     // power-ups
     ghostUntilRef.current = 0;
     cloneUntilRef.current = 0;
-    gravityUntilRef.current = 0;
 
     // fundo/tema
     bgOffRef.current = 0;
@@ -288,14 +375,10 @@ setGameStarted(true);
 
   // ===== INPUT: inverter gravidade =====
   const flipGravity = useCallback(() => {
-  if (stoppedRef.current) return;
-  if (lockedRef.current) return;
-  wantFlipRef.current = true; // só marca pedido; quem decide é o step()
-}, []);
-
-
-
-
+    if (stoppedRef.current) return;
+    if (lockedRef.current) return;
+    wantFlipRef.current = true; // só marca pedido; quem decide é o step()
+  }, []);
 
   /** ===== carregar BG (imagem/vídeo) e sprites ===== */
   useEffect(() => {
@@ -317,7 +400,6 @@ setGameStarted(true);
       v.muted = true;
       (v as any).playsInline = true;
       v.preload = "auto";
-      // não damos play aqui; tocamos quando o tema entra
       toLoad.push(v);
       return v;
     }
@@ -336,7 +418,6 @@ setGameStarted(true);
       others.push(img);
       return img;
     }
-    // Carrega o personagem selecionado dinamicamente
     playerImgRef.current = make(selectedCharacter.src);
     hydrantGreenRef.current = make(HYDRANT_GREEN_SRC);
     hydrantRedRef.current = make(HYDRANT_RED_SRC);
@@ -402,7 +483,7 @@ setGameStarted(true);
         if (ctx && ctx.state === "suspended") await ctx.resume();
         audioUnlockedRef.current = true;
         crossfadeTo("exploration");
-        // tenta tocar vídeo do tema atual (se for vídeo)
+
         const media = bgMediaRef.current;
         if (media) {
           const cur = media[bgIdxRef.current];
@@ -421,7 +502,6 @@ setGameStarted(true);
       } catch {}
       audioUnlockedRef.current = true;
       crossfadeTo("exploration");
-      // idem: tentar vídeo quando destravar
       const media = bgMediaRef.current;
       if (media) {
         const cur = media[bgIdxRef.current];
@@ -433,6 +513,7 @@ setGameStarted(true);
       window.removeEventListener("keydown", unlockAudio);
     };
 
+    // manter pointerdown aqui apenas para destravar áudio (não é input de jogo)
     window.addEventListener("pointerdown", unlockAudio);
     window.addEventListener("keydown", unlockAudio);
 
@@ -573,94 +654,55 @@ setGameStarted(true);
     const end = nowSec() + PU_DURATION[kind];
     if (kind === "ghost")  ghostUntilRef.current  = Math.max(ghostUntilRef.current, end);
     if (kind === "clone")  cloneUntilRef.current  = Math.max(cloneUntilRef.current, end);
-    if (kind === "gravity") {
-      gravityUntilRef.current = Math.max(gravityUntilRef.current, end);
-      gravityInvertedRef.current = true; // força invertido
-      playerYAnimRef.current = 1;        // anima rumo ao teto
-      playerYAnimTRef.current = 0;
-    }
   }
   function isGhost()   { return nowSec() < ghostUntilRef.current; }
   function hasClone()  { return nowSec() < cloneUntilRef.current; }
-  function isGravity() { return nowSec() < gravityUntilRef.current; }
-  function justEnded(endTs: number, windowSec = 0.25) {
-  if (!endTs) return false;
-  const dt = nowSec() - endTs;
-  // true se acabou nos últimos N segundos
-  return dt >= 0 && dt <= windowSec;
-}
 
   // lógica por frame
   const step = (dt: number) => {
     if (lockedRef.current) return;
     const dx = speedRef.current * dt;
-    // ===== PROCESSAR PEDIDO DE FLIP AQUI (sem race com o input) =====
-// ===== PROCESSA PEDIDO DE FLIP (fonte única da verdade) =====
-if (wantFlipRef.current) {
-  wantFlipRef.current = false; // consome o pedido
 
-  const now = nowSec();
+    // ===== PROCESSA PEDIDO DE FLIP (fonte única da verdade) =====
+    if (wantFlipRef.current) {
+      wantFlipRef.current = false; // consome o pedido
 
-  // Evita duplo-flip no mesmo frame ou a cada ~50ms (toque duplicado/pointer)
-  if (now - justFlippedAtRef.current < 0.05) {
-    // ignore este pedido
-  } else {
-    // Se acabou ghost/gravity "agora há pouco" OU estamos na janela de graça -> zera cooldown
-    const endedGhostRecently = ghostUntilRef.current > 0 && now >= ghostUntilRef.current && (now - ghostUntilRef.current) <= 0.30;
-    const endedGravRecently  = gravityUntilRef.current > 0 && now >= gravityUntilRef.current && (now - gravityUntilRef.current) <= 0.30;
-    if (endedGhostRecently || endedGravRecently || now < gravGraceUntilRef.current) {
-      gravityFlipCooldownRef.current = 0;
-    }
+      const now = nowSec();
 
-    // Enquanto GRAVITY estiver ativo, não permite desinverter (ele força invertido)
-    const forcing = now < gravityUntilRef.current;
-    const alreadyInverted = gravityInvertedRef.current;
+      // 1) anti-duplicação de eventos muito próximos
+      if (now - justFlippedAtRef.current < DUP_FLIP_GUARD_SECS) {
+        // ignora
+      } else {
+        // 2) não refilpar no meio do tween (evita “vai e volta”)
+        const tweenProg = playerYAnimTRef.current; // 0..1
+        if (tweenProg < MIN_TWEEN_TO_REFLIP) {
+          // ainda no ar — ignora este pedido
+        } else {
+          // 3) respeita cooldown
+          if (gravityFlipCooldownRef.current <= 0) {
+            gravityInvertedRef.current = !gravityInvertedRef.current;
+            playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0;
+            playerYAnimTRef.current = 0;
 
-    // Só flipa se não tiver cooldown OU se estivermos na janela de graça
-    if (gravityFlipCooldownRef.current <= 0 || now < gravGraceUntilRef.current) {
-      if (!(forcing && alreadyInverted)) {
-        gravityInvertedRef.current = !alreadyInverted;
-        playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0;
-        playerYAnimTRef.current = 0;
-        gravityFlipCooldownRef.current = FLIP_COOLDOWN; // mantém seu valor (0.01 se quiser)
-        lastFlipAtRef.current = now;
-        justFlippedAtRef.current = now; // trava micro-janela contra duplo-flip
+            gravityFlipCooldownRef.current = FLIP_COOLDOWN;
+            lastFlipAtRef.current = now;
+            justFlippedAtRef.current = now; // trava micro-janela contra duplo-flip
+          }
+        }
       }
     }
-  }
-}
-
-
 
     // cooldown do flip
     if (gravityFlipCooldownRef.current > 0) {
-  gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
-}
-if (playerYAnimTRef.current < 1) {
-  playerYAnimTRef.current = Math.min(1, playerYAnimTRef.current + dt / FLIP_TWEEN_SECS);
-}
+      gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
+    }
 
-    // --- liberar flip imediatamente quando o ghost termina ---
+    // --- liberar flip imediatamente quando o GHOST termina (só por UX) ---
     const ghostActive = isGhost();
     if (wasGhostRef.current && !ghostActive) {
-      // o ghost acabou neste frame → zera o cooldown para não "travar" o primeiro flip
       gravityFlipCooldownRef.current = 0;
     }
     wasGhostRef.current = ghostActive;
-    // --- liberar flip imediatamente quando o GRAVITY termina ---
-
-    const gravActive = isGravity();
-if (wasGravityRef.current && !gravActive) {
-  const now = nowSec();
-  gravityFlipCooldownRef.current = 0;               // pode flipar já
-  gravGraceUntilRef.current = now + GRAV_END_GRACE; // janela de graça (1s)
-  // NÃO altere gravityInvertedRef nem playerYAnim* aqui.
-  lastFlipAtRef.current = now;
-}
-wasGravityRef.current = gravActive;
-
-
-
 
     // tween entre chão (0) e teto (1)
     if (playerYAnimTRef.current < 1) {
@@ -695,8 +737,8 @@ wasGravityRef.current = gravActive;
         (o.lane === "top" && playerLaneIsTop);
       const overlapX = o.x < PLAYER_X + PLAYER_W && o.x + HYDRANT_W > PLAYER_X;
 
-       const invulneravel = isGhost() || (nowSec() < gravGraceUntilRef.current);
-        if (!o.fake && !invulneravel && sameLane && overlapX) {
+      const invulneravel = isGhost(); // removido grace de gravidade
+      if (!o.fake && !invulneravel && sameLane && overlapX) {
         if (!stoppedRef.current) {
           stoppedRef.current = true;
           setGameOver(true);
@@ -727,7 +769,7 @@ wasGravityRef.current = gravActive;
         const dodged = (playerLaneIsTop ? "top" : "bottom") !== o.lane;
 
         if (dodged || isGhost() || o.fake) {
-          // pontos: 1 (ou 2 se clone estiver ativo)
+          // pontos: 1 (ou +1 se clone estiver ativo)
           let gain = 1 + (hasClone() ? 1 : 0);
           // bônus por flip no limite
           if (Math.abs(nowSec() - lastFlipAtRef.current) <= FLIP_WINDOW) {
@@ -1005,15 +1047,17 @@ wasGravityRef.current = gravActive;
         flipGravity();
       }
     };
-    const onClick = () => {
+    // usar pointerup ajuda a evitar duplos eventos em mobile
+    const onPointerUp = () => {
       if (lockedRef.current) { onRequireLogin?.(); return; }
       flipGravity();
     };
+
     window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onClick);
+    window.addEventListener("pointerup", onPointerUp);
     return () => {
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onClick);
+      window.removeEventListener("pointerup", onPointerUp);
     };
   }, [flipGravity, onRequireLogin, gameStarted]);
 
@@ -1044,10 +1088,9 @@ wasGravityRef.current = gravActive;
     if (char) {
       setSelectedCharacter(char);
     }
-     resetStateRefs();
+    resetStateRefs();
     setShowCharSelect(false);
     setGameStarted(true);
-    // Carrega o playerImgRef com o src selecionado (já feito no useEffect de assets)
   };
 
   // Função para reiniciar (não volta à seleção, usa o personagem atual)
@@ -1064,10 +1107,11 @@ wasGravityRef.current = gravActive;
       setShowCharSelect(true);
     }
   };
+
   // expõe openCharSelect para o pai
-useImperativeHandle(ref, () => ({
-  openCharSelect,
- }), [gameOver, gameStarted]);
+  useImperativeHandle(ref, () => ({
+    openCharSelect,
+  }), [gameOver, gameStarted]);
 
   return (
     <div
@@ -1075,76 +1119,70 @@ useImperativeHandle(ref, () => ({
       className="relative w-full max-w-4xl mx-auto"
       style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }}
     >
-      {/* Tela de seleção de personagem (responsiva: coluna em mobile, grid em desktop) */}
+      {/* Tela de seleção de personagem */}
       {showCharSelect && (
-  <div className="absolute inset-0 z-10 bg-black/80 backdrop-blur-md rounded-2xl">
-    <div className="absolute inset-0 flex items-center justify-center p-3">
-      <div className="w-full max-w-[560px] rounded-2xl border border-white/10 bg-zinc-900/70 shadow-2xl">
-
-        {/* Cabeçalho fixo */}
-        <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/80 backdrop-blur">
-          <h2 className="text-white text-lg font-semibold">Select character</h2>
-          <button
-            onClick={() => setShowCharSelect(false)}
-            className="rounded-xl px-3 py-1.5 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Lista — vertical no mobile, grid a partir do sm */}
-        <div className="px-3 pt-3 pb-2 max-h-[calc(100svh-220px)] overflow-y-auto">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-            {CHARACTERS.map((char) => {
-              const isSel = selectedCharacter?.src === char.src;
-              return (
+        <div className="absolute inset-0 z-10 bg-black/80 backdrop-blur-md rounded-2xl">
+          <div className="absolute inset-0 flex items-center justify-center p-3">
+            <div className="w-full max-w-[560px] rounded-2xl border border-white/10 bg-zinc-900/70 shadow-2xl">
+              <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/80 backdrop-blur">
+                <h2 className="text-white text-lg font-semibold">Select character</h2>
                 <button
-                  key={char.src}
-                  onClick={() => setSelectedCharacter(char)}
-                  className={`flex items-center gap-3 w-full p-3 rounded-xl border transition
-                    ${isSel
-                      ? "bg-white/20 border-white/40"
-                      : "bg-white/10 border-white/15 hover:bg-white/15"}`}
+                  onClick={() => setShowCharSelect(false)}
+                  className="rounded-xl px-3 py-1.5 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
                 >
-                  <img
-                    src={char.src}
-                    alt={char.name}
-                    className="h-14 w-14 rounded-lg object-contain ring-1 ring-white/10 bg-black/20"
-                  />
-                  <div className="flex-1 text-left">
-                    <div className="text-white text-base font-medium">{char.name}</div>
-                    {isSel && <div className="text-emerald-300 text-xs">Selecionado</div>}
-                  </div>
-                  {isSel && <span className="text-emerald-300 text-lg">✓</span>}
+                  ✕
                 </button>
-              );
-            })}
+              </div>
+
+              <div className="px-3 pt-3 pb-2 max-h-[calc(100svh-220px)] overflow-y-auto">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+                  {CHARACTERS.map((char) => {
+                    const isSel = selectedCharacter?.src === char.src;
+                    return (
+                      <button
+                        key={char.src}
+                        onClick={() => setSelectedCharacter(char)}
+                        className={`flex items-center gap-3 w-full p-3 rounded-xl border transition
+                          ${isSel
+                            ? "bg-white/20 border-white/40"
+                            : "bg-white/10 border-white/15 hover:bg-white/15"}`}
+                      >
+                        <img
+                          src={char.src}
+                          alt={char.name}
+                          className="h-14 w-14 rounded-lg object-contain ring-1 ring-white/10 bg-black/20"
+                        />
+                        <div className="flex-1 text-left">
+                          <div className="text-white text-base font-medium">{char.name}</div>
+                          {isSel && <div className="text-emerald-300 text-xs">Selecionado</div>}
+                        </div>
+                        {isSel && <span className="text-emerald-300 text-lg">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 px-4 py-3 border-t border-white/10 bg-zinc-900/80 backdrop-blur">
+                <button
+                  onClick={() => setShowCharSelect(false)}
+                  className="rounded-xl px-4 py-2 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => startGame()}
+                  className="rounded-xl px-4 py-2 bg-emerald-600 text-white text-sm hover:opacity-90"
+                >
+                  Play
+                </button>
+              </div>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Rodapé fixo */}
-        <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 px-4 py-3 border-t border-white/10 bg-zinc-900/80 backdrop-blur">
-          <button
-            onClick={() => setShowCharSelect(false)}
-            className="rounded-xl px-4 py-2 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => startGame()}
-            className="rounded-xl px-4 py-2 bg-emerald-600 text-white text-sm hover:opacity-90"
-          >
-            Play
-          </button>
-        </div>
-
-      </div>
-    </div>
-  </div>
-)}
-
-
-      {/* Canvas (só visível se houver personagem selecionado) */}
+      {/* Canvas */}
       {selectedCharacter && (
         <canvas
           ref={canvasRef}
@@ -1201,7 +1239,6 @@ useImperativeHandle(ref, () => ({
                 try { audioCtxRef.current?.resume(); } catch {}
                 audioUnlockedRef.current = true;
                 crossfadeTo("exploration");
-                // tenta vídeo se tema atual for vídeo
                 const media = bgMediaRef.current;
                 if (media) {
                   const cur = media[bgIdxRef.current];
@@ -1228,97 +1265,7 @@ useImperativeHandle(ref, () => ({
     </div>
   );
 }
-export default forwardRef<GameCanvasHandle, GameCanvasProps>(GameCanvas);
 
-/** ===== utils & desenho ===== */
-function rand(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-function line(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-}
-
-/** Desenha imagem crua (sem translate/flip), ou retângulo fallback */
-function drawImageOrRect(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement | null,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  fallbackColor?: string
-) {
-  if (img && img.complete) {
-    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, x, y, w, h);
-  } else if (fallbackColor) {
-    ctx.fillStyle = fallbackColor;
-    ctx.fillRect(x, y, w, h);
-  }
-}
-
-/** Desenha imagem com opção de flip vertical (para pista superior) */
-function drawFlippable(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement | null,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  flipVertical: boolean,
-  fallbackColor?: string
-) {
-  ctx.save();
-
-  if (flipVertical) {
-    ctx.translate(x, y + h);
-    ctx.scale(1, -1);
-  } else {
-    ctx.translate(x, y);
-  }
-
-  if (img && img.complete) {
-    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, 0, w, h);
-  } else if (fallbackColor) {
-    ctx.fillStyle = fallbackColor;
-    ctx.fillRect(0, 0, w, h);
-  }
-
-  ctx.restore();
-}
-
-/** Spawns */
-function spawnObstacle(): Obstacle {
-  const color = (["green", "red", "blue"] as HydrantColor[])[rand(0, 2)];
-  const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
-
-  const behaviors: ObstacleBehavior[] = ["wiggle", "fall", "slide", "spin"];
-  const behavior: ObstacleBehavior =
-    Math.random() < DYN_BEHAV_CHANCE ? behaviors[rand(0, behaviors.length - 1)] : "static";
-
-  const fake = Math.random() < FAKE_OBS_CHANCE;
-
-  return {
-    x: WIDTH + rand(0, 80),
-    lane,
-    passed: false,
-    color,
-    behavior,
-    t: 0,
-    fake,
-  };
-}
-
-function spawnPickup(): Pickup | null {
-  if (Math.random() > PICKUP_CHANCE) return null;
-  const kinds: PowerUpKind[] = ["ghost", "clone", "gravity"];
-  const kind = kinds[rand(0, kinds.length - 1)];
-  const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
-  return {
-    x: WIDTH + rand(120, 200),
-    lane,
-    kind,
-  };
-}
+// ✅ export seguro para evitar erro do SWC
+const GameCanvasWithRef = forwardRef<GameCanvasHandle, GameCanvasProps>(GameCanvas);
+export default GameCanvasWithRef;
