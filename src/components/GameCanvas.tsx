@@ -4,16 +4,16 @@ import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHand
 
 /** ====== CONFIG ====== */
 
-/** Velocidade (ajuste ao gosto) */
+/** Velocidade */
 const SPEED_START = 225; // px/s inicial
-const SPEED_ADD = 25;    // +px/s por obstáculo DESVIADO
+const SPEED_ADD = 10;    // +px/s por obstáculo DESVIADO
 const SPEED_MAX = 5000;
 
-/** Canvas base (o canvas renderiza nesses "px lógicos" e é escalado via CSS) */
+/** Canvas base */
 const WIDTH = 800;
 const HEIGHT = 360;
 
-/** Layout das pistas (margem do teto/solo) */
+/** Layout das pistas */
 const CEILING_Y = 40;
 const GROUND_Y = HEIGHT - 40;
 
@@ -30,10 +30,10 @@ const SPAWN_MAX = 800; // px
 
 /** Assets (ajuste as extensões conforme seus arquivos) */
 const HYDRANT_GREEN_SRC = "/images/h1.png";
-const HYDRANT_RED_SRC = "/images/h2.png";
-const HYDRANT_BLUE_SRC = "/images/h3.png";
+const HYDRANT_RED_SRC   = "/images/h2.png";
+const HYDRANT_BLUE_SRC  = "/images/h3.png";
 
-/** Personagens disponíveis para seleção (adicione mais conforme necessário) */
+/** Personagens disponíveis para seleção */
 type Character = { name: string; src: string };
 const CHARACTERS: Character[] = [
   { name: "Pulse",  src: "/images/player.png"  },
@@ -74,9 +74,7 @@ const MUSIC = {
 
 const MUSIC_EXPLORATION_MAX = 20; // score <= 20 → exploração
 const MUSIC_BATTLE_MAX = 40;      // 21..49 → batalha
-// >= 50 → boss
-
-const MUSIC_FADE_SECS = 0.8; // fade entre faixas
+const MUSIC_FADE_SECS = 0.8;      // fade entre faixas
 const MUSIC_DEFAULT_VOL = 0.6;
 
 /** ====== TIPOS ====== */
@@ -85,17 +83,18 @@ type HydrantColor = "green" | "red" | "blue";
 type MusicKind = keyof typeof MUSIC;
 
 /** ===== POWER-UPS / PICKUPS =====
- * Removido: 'gravity'. Mantém apenas 'ghost' e 'clone'.
+ * Mantém apenas 'ghost' e 'clone'.
  */
 type PowerUpKind = "ghost" | "clone";
 const PU_DURATION: Record<PowerUpKind, number> = {
-  ghost: 6,    // atravessa tudo
-  clone: 8,    // duplica pontos
+  ghost: 6,   // atravessa tudo
+  clone: 8,   // duplica pontos
 };
 
 type ObstacleBehavior = "static" | "wiggle" | "fall" | "slide" | "spin";
 
 type Obstacle = {
+  kind?: undefined; // para diferenciar no union
   x: number;
   lane: Lane;
   passed: boolean;
@@ -103,6 +102,15 @@ type Obstacle = {
   behavior: ObstacleBehavior;
   t?: number;       // tempo local p/ animação
   fake?: boolean;   // obstáculos-surpresa que não colidem
+};
+
+type Gate = {
+  kind: "gate";
+  x: number;
+  width: number;
+  holeH: number; // altura do buraco (igual à altura do player)
+  t: number;     // 0..1 posição do buraco (0=topo, 1=base) — FIXO
+  passed: boolean;
 };
 
 type Pickup = {
@@ -123,8 +131,13 @@ const FLIP_WINDOW = 0.25; // s
 
 // Anti-reflip / UX do flip
 const FLIP_COOLDOWN = 0.12;           // cooldown leve
-const MIN_TWEEN_TO_REFLIP = 0.75;     // precisa concluir 75% do tween antes de aceitar outro flip
-const DUP_FLIP_GUARD_SECS = 0.18;     // guarda contra taps duplos muito próximos
+const MIN_TWEEN_TO_REFLIP = 0.75;     // precisa concluir 75% do tween para aceitar outro flip
+const DUP_FLIP_GUARD_SECS = 0.18;     // guarda contra taps duplos próximos
+
+/** Gate */
+const GATE_WIDTH = 56;
+const GATE_SCORE_INTERVAL = 7;     // intervalo de score para marcar o PRÓXIMO spawn como gate
+const POST_GATE_SAFE_DIST = 220;   // px sem hidrantes logo após o gate
 
 type GameCanvasProps = {
   onGameOver: (score: number) => void;
@@ -158,7 +171,7 @@ function drawImageOrRect(
   h: number,
   fallbackColor?: string
 ) {
-  if (img && img.complete) {
+  if (img && img.complete && img.naturalWidth > 0) {
     ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, x, y, w, h);
   } else if (fallbackColor) {
     ctx.fillStyle = fallbackColor;
@@ -183,7 +196,7 @@ function drawFlippable(
   } else {
     ctx.translate(x, y);
   }
-  if (img && img.complete) {
+  if (img && img.complete && img.naturalWidth > 0) {
     ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, 0, w, h);
   } else if (fallbackColor) {
     ctx.fillStyle = fallbackColor;
@@ -216,7 +229,7 @@ function spawnObstacle(): Obstacle {
 
 function spawnPickup(): Pickup | null {
   if (Math.random() > PICKUP_CHANCE) return null;
-  const kinds: PowerUpKind[] = ["ghost", "clone"]; // removido "gravity"
+  const kinds: PowerUpKind[] = ["ghost", "clone"];
   const kind = kinds[rand(0, kinds.length - 1)];
   const lane: Lane = Math.random() < 0.5 ? "top" : "bottom";
   return {
@@ -248,27 +261,36 @@ function GameCanvas(
 
   // Estado para seleção de personagem e início do jogo
   const [gameStarted, setGameStarted] = useState(false);
-  const [showCharSelect, setShowCharSelect] = useState(true); // Mostra seleção apenas na primeira vez
+  const [showCharSelect, setShowCharSelect] = useState(true);
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
-  const [highScore, setHighScore] = useState(0); // High score local
+  const [highScore, setHighScore] = useState(0);
 
   // ===== estado do jogo em refs =====
   const scoreRef = useRef(0);
   const speedRef = useRef(SPEED_START);
-  const obstaclesRef = useRef<Obstacle[]>([]);
+  const obstaclesRef = useRef<(Obstacle | Gate)[]>([]);
   const pickupsRef = useRef<Pickup[]>([]);
   const nextSpawnDistRef = useRef(rand(SPAWN_MIN, SPAWN_MAX));
   const lastTsRef = useRef<number | null>(null);
   const stoppedRef = useRef(false);
   const notifiedRef = useRef(false);
 
-  // ===== GRAVIDADE (apenas manual) =====
-  const gravityInvertedRef = useRef(false);     // estado alvo (baixo=false, topo=true)
-  const gravityFlipCooldownRef = useRef(0);     // cooldown anti-spam
-  const playerYAnimRef = useRef(0);             // alvo 0|1
-  const playerYAnimTRef = useRef(1);            // progresso 0..1 (começa “em sincronia”)
+  // Gate agendamento (substitui um spawn)
+  const nextGateThresholdRef = useRef(GATE_SCORE_INTERVAL); // quando bater esse score, marcar próximo spawn como gate
+  const wantGateNextRef = useRef(false);                     // se true, o próximo spawn é gate (em vez de hidrante)
+  const gateStartsTopRef = useRef(true);                     // alterna TOP/BOTTOM do buraco
+
+  // Proteções pós-gate
+  const postGateSafeDistRef = useRef(0);         // px sem hidrantes logo após o gate
+  const nextHydrantMustBeFakeRef = useRef(false); // primeiro hidrante após gate é fake
+
+  // ===== GRAVIDADE (manual) =====
+  const gravityInvertedRef = useRef(false); // baixo=false, topo=true
+  const gravityFlipCooldownRef = useRef(0);
+  const playerYAnimRef = useRef(0);  // alvo 0|1
+  const playerYAnimTRef = useRef(1); // progresso 0..1
   const FLIP_TWEEN_SECS = 0.22;
-  const lastFlipAtRef = useRef(-999);           // p/ bônus de flip no limite
+  const lastFlipAtRef = useRef(-999);
   const wantFlipRef = useRef(false);
   const justFlippedAtRef = useRef(0);
 
@@ -287,9 +309,9 @@ function GameCanvas(
 
   // parallax + tema
   const bgOffRef = useRef(0);
-  const bgIdxRef = useRef(0);       // tema atual
-  const bgPrevIdxRef = useRef(0);   // tema anterior (p/ fade)
-  const bgFadeTRef = useRef(1);     // 0..1 (1=sem transição)
+  const bgIdxRef = useRef(0);
+  const bgPrevIdxRef = useRef(0);
+  const bgFadeTRef = useRef(1);
 
   // ===== áudio =====
   const explorationMusicRef = useRef<HTMLAudioElement | null>(null);
@@ -310,19 +332,12 @@ function GameCanvas(
   // Carregar high score e personagem selecionado do localStorage
   useEffect(() => {
     const savedHighScore = localStorage.getItem("highScore");
-    if (savedHighScore) {
-      setHighScore(parseInt(savedHighScore, 10));
-    }
+    if (savedHighScore) setHighScore(parseInt(savedHighScore, 10));
 
     const savedChar = localStorage.getItem("selectedCharacter");
-    if (savedChar) {
-      const char = JSON.parse(savedChar) as Character;
-      setSelectedCharacter(char);
-    } else {
-      setSelectedCharacter(CHARACTERS[0]);
-    }
+    if (savedChar) setSelectedCharacter(JSON.parse(savedChar) as Character);
+    else setSelectedCharacter(CHARACTERS[0]);
 
-    // já começa a partida sem abrir seleção
     setShowCharSelect(false);
     setGameStarted(true);
   }, []);
@@ -366,11 +381,18 @@ function GameCanvas(
     bgPrevIdxRef.current = 0;
     bgFadeTRef.current = 1;
 
+    // gate schedule
+    nextGateThresholdRef.current = GATE_SCORE_INTERVAL;
+    wantGateNextRef.current = false;
+    gateStartsTopRef.current = true;
+
+    // pós-gate
+    postGateSafeDistRef.current = 0;
+    nextHydrantMustBeFakeRef.current = false;
+
     setGameOver(false);
-    if (typeof onStatsChange === "function") {
-      onStatsChange({ score: 0, speed: SPEED_START });
-      restartMusic();
-    }
+    onStatsChange?.({ score: 0, speed: SPEED_START });
+    restartMusic();
   };
 
   // ===== INPUT: inverter gravidade =====
@@ -418,10 +440,10 @@ function GameCanvas(
       others.push(img);
       return img;
     }
-    playerImgRef.current = make(selectedCharacter.src);
+    playerImgRef.current    = make(selectedCharacter.src);
     hydrantGreenRef.current = make(HYDRANT_GREEN_SRC);
-    hydrantRedRef.current = make(HYDRANT_RED_SRC);
-    hydrantBlueRef.current = make(HYDRANT_BLUE_SRC);
+    hydrantRedRef.current   = make(HYDRANT_RED_SRC);
+    hydrantBlueRef.current  = make(HYDRANT_BLUE_SRC);
 
     let loaded = 0;
     const done = () => {
@@ -463,8 +485,8 @@ function GameCanvas(
     if (ctx) audioCtxRef.current = ctx;
 
     explorationMusicRef.current = new Audio(MUSIC.exploration);
-    battleMusicRef.current = new Audio(MUSIC.battle);
-    bossMusicRef.current = new Audio(MUSIC.boss);
+    battleMusicRef.current      = new Audio(MUSIC.battle);
+    bossMusicRef.current        = new Audio(MUSIC.boss);
 
     [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current].forEach((a) => {
       if (!a) return;
@@ -513,7 +535,7 @@ function GameCanvas(
       window.removeEventListener("keydown", unlockAudio);
     };
 
-    // manter pointerdown aqui apenas para destravar áudio (não é input de jogo)
+    // pointerdown/keydown apenas para destravar áudio
     window.addEventListener("pointerdown", unlockAudio);
     window.addEventListener("keydown", unlockAudio);
 
@@ -559,8 +581,8 @@ function GameCanvas(
 
     const map: Record<MusicKind, HTMLAudioElement | null> = {
       exploration: explorationMusicRef.current,
-      battle: battleMusicRef.current,
-      boss: bossMusicRef.current,
+      battle:      battleMusicRef.current,
+      boss:        bossMusicRef.current,
     };
 
     const target = map[kind];
@@ -582,29 +604,19 @@ function GameCanvas(
     currentMusicRef.current = kind;
   }
 
-  function stopAllFades() {
-    fadeRafRef.current.forEach((id) => cancelAnimationFrame(id));
-    fadeRafRef.current.clear();
-  }
-
   function restartMusic() {
     try { audioCtxRef.current?.resume(); } catch {}
-    audioUnlockedRef.current = true;
+    const fades = fadeRafRef.current;
+    fades.forEach((id) => cancelAnimationFrame(id));
+    fades.clear();
 
-    stopAllFades();
-
-    const els = [
-      explorationMusicRef.current,
-      battleMusicRef.current,
-      bossMusicRef.current,
-    ];
+    const els = [explorationMusicRef.current, battleMusicRef.current, bossMusicRef.current];
     for (const el of els) {
       if (!el) continue;
       try { el.pause(); } catch {}
       el.currentTime = 0;
       el.volume = 0;
     }
-
     currentMusicRef.current = null;
     crossfadeTo("exploration");
   }
@@ -614,6 +626,18 @@ function GameCanvas(
     if (score > MUSIC_EXPLORATION_MAX && score <= MUSIC_BATTLE_MAX) desired = "battle";
     else if (score > MUSIC_BATTLE_MAX) desired = "boss";
     if (desired !== currentMusicRef.current) crossfadeTo(desired);
+  }
+
+  // ===== spawn do Gate (usa PLAYER_H) =====
+  function spawnGate(startAtTop: boolean): Gate {
+    return {
+      kind: "gate",
+      x: WIDTH + 60,
+      width: GATE_WIDTH,
+      holeH: PLAYER_H, // buraco exatamente do tamanho do player
+      t: startAtTop ? 0 : 1, // FIXO: topo (0) ou base (1)
+      passed: false,
+    };
   }
 
   // loop principal (só roda se o jogo estiver iniciado e assets prontos)
@@ -663,31 +687,20 @@ function GameCanvas(
     if (lockedRef.current) return;
     const dx = speedRef.current * dt;
 
-    // ===== PROCESSA PEDIDO DE FLIP (fonte única da verdade) =====
+    // ===== PROCESSA PEDIDO DE FLIP =====
     if (wantFlipRef.current) {
       wantFlipRef.current = false; // consome o pedido
-
       const now = nowSec();
 
-      // 1) anti-duplicação de eventos muito próximos
-      if (now - justFlippedAtRef.current < DUP_FLIP_GUARD_SECS) {
-        // ignora
-      } else {
-        // 2) não refilpar no meio do tween (evita “vai e volta”)
+      if (now - justFlippedAtRef.current >= DUP_FLIP_GUARD_SECS) {
         const tweenProg = playerYAnimTRef.current; // 0..1
-        if (tweenProg < MIN_TWEEN_TO_REFLIP) {
-          // ainda no ar — ignora este pedido
-        } else {
-          // 3) respeita cooldown
-          if (gravityFlipCooldownRef.current <= 0) {
-            gravityInvertedRef.current = !gravityInvertedRef.current;
-            playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0;
-            playerYAnimTRef.current = 0;
-
-            gravityFlipCooldownRef.current = FLIP_COOLDOWN;
-            lastFlipAtRef.current = now;
-            justFlippedAtRef.current = now; // trava micro-janela contra duplo-flip
-          }
+        if (tweenProg >= MIN_TWEEN_TO_REFLIP && gravityFlipCooldownRef.current <= 0) {
+          gravityInvertedRef.current = !gravityInvertedRef.current;
+          playerYAnimRef.current = gravityInvertedRef.current ? 1 : 0;
+          playerYAnimTRef.current = 0;
+          gravityFlipCooldownRef.current = FLIP_COOLDOWN;
+          lastFlipAtRef.current = now;
+          justFlippedAtRef.current = now;
         }
       }
     }
@@ -697,7 +710,7 @@ function GameCanvas(
       gravityFlipCooldownRef.current = Math.max(0, gravityFlipCooldownRef.current - dt);
     }
 
-    // --- liberar flip imediatamente quando o GHOST termina (só por UX) ---
+    // liberar flip ao acabar GHOST (UX)
     const ghostActive = isGhost();
     if (wasGhostRef.current && !ghostActive) {
       gravityFlipCooldownRef.current = 0;
@@ -712,39 +725,117 @@ function GameCanvas(
     // parallax
     bgOffRef.current += dx * BG_SPEED_FACTOR;
 
-    // obstáculos
+    // ===== atualiza distância segura pós-gate =====
+    if (postGateSafeDistRef.current > 0) {
+      postGateSafeDistRef.current = Math.max(0, postGateSafeDistRef.current - dx);
+    }
+
+    // ===== obstáculos & gate =====
     const obs = obstaclesRef.current;
     for (const o of obs) {
       o.x -= dx;
 
-      // animação local do obstáculo (dinâmico)
-      if (o.t == null) o.t = 0;
-      o.t += dt;
+      // gate não anima (t fixo)
+      if ((o as Gate).kind !== "gate") {
+        const h = o as Obstacle;
+        if (h.t == null) h.t = 0;
+        h.t += dt;
+      }
+    }
 
-      // colisão (caixa simples) — usa gravidade/tween
-      const TOP_LINE_Y = CEILING_Y + PLAYER_H;
+    // ===== COLISÕES & PONTUAÇÃO =====
+    const TOP_LINE_Y = CEILING_Y + PLAYER_H;
 
-      // posição contínua do player (0..1)
-      const anim = playerYAnimRef.current; // alvo
-      const tAnim = playerYAnimTRef.current; // progresso
-      const ease = (x: number) => 1 - Math.pow(1 - x, 2);
-      const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
-      const playerLaneIsTop = blend > 0.5;
+    const anim = playerYAnimRef.current; // alvo
+    const tAnim = playerYAnimTRef.current; // progresso
+    const ease = (x: number) => 1 - Math.pow(1 - x, 2);
+    const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
+    const playerLaneIsTop = blend > 0.5;
+    const player_draw_y = playerLaneIsTop ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
 
-      const playerY = playerLaneIsTop ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
+    for (const o of obs) {
+      // GATE
+      if ((o as Gate).kind === "gate") {
+        const g = o as Gate;
+
+        // bounding do gate entre as linhas
+        const gateX = g.x;
+        const gateY = TOP_LINE_Y;
+        const gateW = g.width;
+        const gateH = GROUND_Y - TOP_LINE_Y;
+
+        // buraco fixo: 0=TOP_LINE_Y, 1=GROUND_Y - holeH
+        const holeStart = TOP_LINE_Y;
+        const holeEnd = GROUND_Y - g.holeH;
+        const holeY = holeStart + (holeEnd - holeStart) * g.t;
+        const holeH = g.holeH;
+
+        // bounding do player
+        const px = PLAYER_X;
+        const py = player_draw_y;
+        const pw = PLAYER_W;
+        const ph = PLAYER_H;
+
+        const overlapX = gateX < px + pw && gateX + gateW > px;
+        const insideHoleY = (py >= holeY) && (py + ph <= holeY + holeH);
+
+        if (overlapX && !isGhost()) {
+          // colide se NÃO está totalmente dentro do buraco
+          if (!insideHoleY) {
+            if (!stoppedRef.current) {
+              stoppedRef.current = true;
+              setGameOver(true);
+              if (scoreRef.current > highScore) setHighScore(scoreRef.current);
+              ["exploration", "battle", "boss"].forEach((k) => {
+                const el =
+                  k === "exploration"
+                    ? explorationMusicRef.current
+                    : k === "battle"
+                    ? battleMusicRef.current
+                    : bossMusicRef.current;
+                if (el && !el.paused) fadeAudio(el, 0, MUSIC_FADE_SECS);
+                setTimeout(() => el?.pause(), MUSIC_FADE_SECS * 1000 + 50);
+              });
+              if (!notifiedRef.current) {
+                notifiedRef.current = true;
+                onGameOver(scoreRef.current);
+              }
+            }
+            return;
+          }
+        }
+
+        // pontua quando passar a parede
+        if (!g.passed && g.x + g.width < PLAYER_X) {
+          g.passed = true;
+          let gain = 1 + (hasClone() ? 1 : 0);
+          if (Math.abs(nowSec() - lastFlipAtRef.current) <= FLIP_WINDOW) gain += 1;
+          scoreRef.current += gain;
+          speedRef.current = Math.min(SPEED_MAX, speedRef.current + SPEED_ADD);
+          evaluateMusicByScore(scoreRef.current);
+
+          // marcar o próximo gate por score (se atingiu o threshold)
+          if (scoreRef.current >= nextGateThresholdRef.current) {
+            wantGateNextRef.current = true;                    // o próximo spawn vira gate
+            nextGateThresholdRef.current += GATE_SCORE_INTERVAL;
+          }
+        }
+        continue;
+      }
+
+      // Hidrantes
+      const h = o as Obstacle;
+
+      // colisão com hidrante
       const sameLane =
-        (o.lane === "bottom" && !playerLaneIsTop) ||
-        (o.lane === "top" && playerLaneIsTop);
-      const overlapX = o.x < PLAYER_X + PLAYER_W && o.x + HYDRANT_W > PLAYER_X;
-
-      const invulneravel = isGhost(); // removido grace de gravidade
-      if (!o.fake && !invulneravel && sameLane && overlapX) {
+        (h.lane === "bottom" && !playerLaneIsTop) ||
+        (h.lane === "top" && playerLaneIsTop);
+      const overlapX = h.x < PLAYER_X + PLAYER_W && h.x + HYDRANT_W > PLAYER_X;
+      if (!h.fake && !isGhost() && sameLane && overlapX) {
         if (!stoppedRef.current) {
           stoppedRef.current = true;
           setGameOver(true);
-          if (scoreRef.current > highScore) {
-            setHighScore(scoreRef.current);
-          }
+          if (scoreRef.current > highScore) setHighScore(scoreRef.current);
           ["exploration", "battle", "boss"].forEach((k) => {
             const el =
               k === "exploration"
@@ -763,36 +854,65 @@ function GameCanvas(
         return;
       }
 
-      // pontua quando o obstáculo passou a posição do player
-      if (!o.passed && o.x + HYDRANT_W < PLAYER_X) {
-        o.passed = true;
-        const dodged = (playerLaneIsTop ? "top" : "bottom") !== o.lane;
-
-        if (dodged || isGhost() || o.fake) {
-          // pontos: 1 (ou +1 se clone estiver ativo)
+      // pontua quando o hidrante passou a posição do player
+      if (!h.passed && h.x + HYDRANT_W < PLAYER_X) {
+        h.passed = true;
+        const dodged = (playerLaneIsTop ? "top" : "bottom") !== h.lane;
+        if (dodged || isGhost() || h.fake) {
           let gain = 1 + (hasClone() ? 1 : 0);
-          // bônus por flip no limite
-          if (Math.abs(nowSec() - lastFlipAtRef.current) <= FLIP_WINDOW) {
-            gain += 1;
-          }
+          if (Math.abs(nowSec() - lastFlipAtRef.current) <= FLIP_WINDOW) gain += 1;
           scoreRef.current += gain;
-
           speedRef.current = Math.min(SPEED_MAX, speedRef.current + SPEED_ADD);
           evaluateMusicByScore(scoreRef.current);
+
+          // marcar próximo gate se bateu o threshold
+          if (scoreRef.current >= nextGateThresholdRef.current) {
+            wantGateNextRef.current = true;
+            nextGateThresholdRef.current += GATE_SCORE_INTERVAL;
+          }
         }
       }
     }
 
     // remove fora da tela
-    while (obs.length && obs[0].x + HYDRANT_W < -100) obs.shift();
+    while (obs.length && (obs[0] as any).x + (("kind" in obs[0] && (obs[0] as Gate).kind === "gate") ? (obs[0] as Gate).width : HYDRANT_W) < -100) {
+      obs.shift();
+    }
 
-    // === SPAWN de obstáculos + pickups ===
+    // === SPAWN: gate substitui o hidrante quando marcado ===
     nextSpawnDistRef.current -= dx;
     if (nextSpawnDistRef.current <= 0) {
-      obstaclesRef.current.push(spawnObstacle());
-      const pu = spawnPickup();
-      if (pu) pickupsRef.current.push(pu);
-      nextSpawnDistRef.current = rand(SPAWN_MIN, SPAWN_MAX);
+      // se o próximo spawn deve ser gate, e já saímos da zona de segurança pós-gate
+      if (wantGateNextRef.current && postGateSafeDistRef.current <= 0) {
+        const gate = spawnGate(gateStartsTopRef.current);
+        gateStartsTopRef.current = !gateStartsTopRef.current; // alterna topo/base para o próximo
+        obstaclesRef.current.push(gate);
+
+        // Proteções pós-gate
+        postGateSafeDistRef.current = POST_GATE_SAFE_DIST; // distância sem hidrantes
+        nextHydrantMustBeFakeRef.current = true;           // e o primeiro hidrante será FAKE
+
+        // pickups: não gerar junto do gate
+        nextSpawnDistRef.current = rand(SPAWN_MIN, SPAWN_MAX);
+        wantGateNextRef.current = false;
+      } else {
+        // se ainda estamos na distância segura pós-gate, apenas adia um pouco
+        if (postGateSafeDistRef.current > 0 && !wantGateNextRef.current) {
+          nextSpawnDistRef.current = Math.min(120, postGateSafeDistRef.current);
+        } else {
+          // hidrante normal
+          const h = spawnObstacle();
+          if (nextHydrantMustBeFakeRef.current) {
+            h.fake = true; // primeiro após gate é FAKE
+            nextHydrantMustBeFakeRef.current = false;
+          }
+          obstaclesRef.current.push(h);
+
+          const pu = spawnPickup();
+          if (pu) pickupsRef.current.push(pu);
+          nextSpawnDistRef.current = rand(SPAWN_MIN, SPAWN_MAX);
+        }
+      }
     }
 
     // === atualiza pickups ===
@@ -800,20 +920,18 @@ function GameCanvas(
     for (const p of ps) {
       p.x -= dx;
 
-      const TOP_LINE_Y = CEILING_Y + PLAYER_H;
-
-      const anim = playerYAnimRef.current;
-      const tAnim = playerYAnimTRef.current;
-      const ease = (x: number) => 1 - Math.pow(1 - x, 2);
-      const blend = ease(tAnim) * (anim) + (1 - ease(tAnim)) * (1 - anim);
-      const playerLaneIsTop = blend > 0.5;
-      const playerY = playerLaneIsTop ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
+      const anim2 = playerYAnimRef.current;
+      const tAnim2 = playerYAnimTRef.current;
+      const ease2 = (x: number) => 1 - Math.pow(1 - x, 2);
+      const blend2 = ease2(tAnim2) * (anim2) + (1 - ease2(tAnim2)) * (1 - anim2);
+      const playerLaneIsTop2 = blend2 > 0.5;
+      const playerY = playerLaneIsTop2 ? TOP_LINE_Y : (GROUND_Y - PLAYER_H);
 
       const pY = p.lane === "bottom" ? GROUND_Y - PICKUP_H : TOP_LINE_Y;
-      const overlapX = p.x < PLAYER_X + PLAYER_W && p.x + PICKUP_W > PLAYER_X;
-      const overlapY = Math.abs(pY - playerY) < 24;
+      const overlapX2 = p.x < PLAYER_X + PLAYER_W && p.x + PICKUP_W > PLAYER_X;
+      const overlapY2 = Math.abs(pY - playerY) < 24;
 
-      if (!p.taken && overlapX && overlapY) {
+      if (!p.taken && overlapX2 && overlapY2) {
         p.taken = true;
         activatePowerUp(p.kind);
       }
@@ -850,12 +968,10 @@ function GameCanvas(
       bgFadeTRef.current = Math.min(1, bgFadeTRef.current + dt / BG_FADE_SECS);
     }
 
-    if (typeof onStatsChange === "function") {
-      onStatsChange({
-        score: scoreRef.current,
-        speed: speedRef.current,
-      });
-    }
+    onStatsChange?.({
+      score: scoreRef.current,
+      speed: speedRef.current,
+    });
   };
 
   // render
@@ -921,39 +1037,70 @@ function GameCanvas(
       ctx.restore();
     }
 
-    // hidrantes (com comportamentos visuais + fake)
+    // desenhar obstáculos e gates
     for (const o of obstaclesRef.current) {
-      const isOTop = o.lane === "top";
+      if ((o as Gate).kind === "gate") {
+        const g = o as Gate;
+        // coluna do gate entre as linhas (sem passar delas)
+        const gateX = g.x;
+        const gateY = TOP_LINE_Y;
+        const gateW = g.width;
+        const gateH = GROUND_Y - TOP_LINE_Y;
+
+        // fundo do gate (suave, sem “quadrado feio”)
+        ctx.save();
+        const grad = ctx.createLinearGradient(0, gateY, 0, gateY + gateH);
+        grad.addColorStop(0, "rgba(255,255,255,0.10)");
+        grad.addColorStop(1, "rgba(255,255,255,0.06)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(gateX, gateY, gateW, gateH);
+
+        // “borda” leve
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(gateX + 0.5, gateY + 0.5, gateW - 1, gateH - 1);
+
+        // buraco fixo (clear)
+        const holeStart = TOP_LINE_Y;
+        const holeEnd = GROUND_Y - g.holeH;
+        const holeY = holeStart + (holeEnd - holeStart) * g.t;
+        ctx.clearRect(gateX + 2, holeY, gateW - 4, g.holeH);
+
+        ctx.restore();
+        continue;
+      }
+
+      // HIDRANTES
+      const h = o as Obstacle;
+      const isOTop = h.lane === "top";
       const o_base_y = isOTop ? TOP_LINE_Y : GROUND_Y;
       const o_draw_y = isOTop ? o_base_y : o_base_y - HYDRANT_H;
 
       const img =
-        o.color === "green"
+        h.color === "green"
           ? hydrantGreenRef.current
-          : o.color === "red"
+          : h.color === "red"
           ? hydrantRedRef.current
           : hydrantBlueRef.current;
 
       const fallback =
-        o.color === "green" ? "#00d084" : o.color === "red" ? "#ef476f" : "#3b82f6";
+        h.color === "green" ? "#00d084" : h.color === "red" ? "#ef476f" : "#3b82f6";
 
-      // offsets/rotação (simples, reusa t)
       let yOffset = 0, angle = 0;
-      if (o.t != null) {
-        switch (o.behavior) {
-          case "wiggle": yOffset = Math.sin(o.t * 6) * 6; break;
-          case "fall":   yOffset = Math.max(0, 16 - o.t * 24); break;
-          case "slide":  yOffset = Math.sin(o.t * 2) > 0 ? -10 : 10; break;
-          case "spin":   angle = (o.t * 6) % (Math.PI * 2); break;
+      if (h.t != null) {
+        switch (h.behavior) {
+          case "wiggle": yOffset = Math.sin(h.t * 6) * 6; break;
+          case "fall":   yOffset = Math.max(0, 16 - h.t * 24); break;
+          case "slide":  yOffset = Math.sin(h.t * 2) > 0 ? -10 : 10; break;
+          case "spin":   angle = (h.t * 6) % (Math.PI * 2); break;
         }
       }
 
       ctx.save();
-      if (o.fake) ctx.globalAlpha = 0.6;
+      if (h.fake) ctx.globalAlpha = 0.6;
 
       if (angle !== 0) {
-        // rotação + flip vertical se for na pista superior
-        const cx = o.x + HYDRANT_W / 2;
+        const cx = h.x + HYDRANT_W / 2;
         const cy = o_draw_y + HYDRANT_H / 2;
         ctx.translate(cx, cy);
         const scaleY = isOTop ? -1 : 1;
@@ -961,7 +1108,7 @@ function GameCanvas(
         ctx.rotate(angle);
         drawImageOrRect(ctx, img, -HYDRANT_W / 2, -HYDRANT_H / 2 + yOffset, HYDRANT_W, HYDRANT_H, fallback);
       } else {
-        drawFlippable(ctx, img, o.x, o_draw_y + yOffset, HYDRANT_W, HYDRANT_H, isOTop, fallback);
+        drawFlippable(ctx, img, h.x, o_draw_y + yOffset, HYDRANT_W, HYDRANT_H, isOTop, fallback);
       }
       ctx.restore();
     }
@@ -986,53 +1133,55 @@ function GameCanvas(
     }
 
     const idxA = bgPrevIdxRef.current;
-    const idxB = bgIdxRef.current;
-    const mA = bgs[idxA];
-    const mB = bgs[idxB];
-    const t = bgFadeTRef.current; // 0..1
+    theLoop: {
+      const idxB = bgIdxRef.current;
+      const mA = bgs[idxA];
+      const mB = bgs[idxB];
+      const t = bgFadeTRef.current; // 0..1
 
-    const drawCover = (el: HTMLImageElement | HTMLVideoElement, alpha: number) => {
-      const iw = (el as any).videoWidth || (el as any).naturalWidth || (el as any).width;
-      const ih = (el as any).videoHeight || (el as any).naturalHeight || (el as any).height;
-      if (!iw || !ih) return;
+      const drawCover = (el: HTMLImageElement | HTMLVideoElement, alpha: number) => {
+        const iw = (el as any).videoWidth || (el as any).naturalWidth || (el as any).width;
+        const ih = (el as any).videoHeight || (el as any).naturalHeight || (el as any).height;
+        if (!iw || !ih) return;
 
-      const canvasRatio = WIDTH / HEIGHT;
-      const imgRatio = iw / ih;
-      let drawW: number, drawH: number, dx = 0, dy = 0;
+        const canvasRatio = WIDTH / HEIGHT;
+        const imgRatio = iw / ih;
+        let drawW: number, drawH: number, dx = 0, dy = 0;
 
-      if (imgRatio > canvasRatio) {
-        const scale = HEIGHT / ih;
-        drawW = iw * scale;
-        drawH = HEIGHT;
-        dx = -(drawW - WIDTH) / 2;
-      } else {
-        const scale = WIDTH / iw;
-        drawW = WIDTH;
-        drawH = ih * scale;
-        dy = -(drawH - HEIGHT) / 2;
+        if (imgRatio > canvasRatio) {
+          const scale = HEIGHT / ih;
+          drawW = iw * scale;
+          drawH = HEIGHT;
+          dx = -(drawW - WIDTH) / 2;
+        } else {
+          const scale = WIDTH / iw;
+          drawW = WIDTH;
+          drawH = ih * scale;
+          dy = -(drawH - HEIGHT) / 2;
+        }
+
+        dx -= (bgOffRef.current * BG_SPEED_FACTOR) % drawW;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        ctx.drawImage(el as any, 0, 0, iw, ih, dx, dy, drawW, drawH);
+
+        // tile horizontal
+        if (dx > 0) {
+          ctx.drawImage(el as any, 0, 0, iw, ih, dx - drawW, dy, drawW, drawH);
+        } else if (dx + drawW < WIDTH) {
+          ctx.drawImage(el as any, 0, 0, iw, ih, dx + drawW, dy, drawW, drawH);
+        }
+        ctx.restore();
+      };
+
+      if (mA && t < 1) drawCover(mA, 1 - t);
+      if (mB) drawCover(mB, t);
+      else {
+        ctx.fillStyle = "#0b1020";
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
       }
-
-      dx -= (bgOffRef.current * BG_SPEED_FACTOR) % drawW;
-
-      ctx.save();
-      ctx.globalAlpha = alpha;
-
-      ctx.drawImage(el as any, 0, 0, iw, ih, dx, dy, drawW, drawH);
-
-      // tile horizontal
-      if (dx > 0) {
-        ctx.drawImage(el as any, 0, 0, iw, ih, dx - drawW, dy, drawW, drawH);
-      } else if (dx + drawW < WIDTH) {
-        ctx.drawImage(el as any, 0, 0, iw, ih, dx + drawW, dy, drawW, drawH);
-      }
-      ctx.restore();
-    };
-
-    if (mA && t < 1) drawCover(mA, 1 - t);
-    if (mB) drawCover(mB, t);
-    else {
-      ctx.fillStyle = "#0b1020";
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
   };
 
@@ -1047,7 +1196,7 @@ function GameCanvas(
         flipGravity();
       }
     };
-    // usar pointerup ajuda a evitar duplos eventos em mobile
+    // pointerup evita duplo evento em mobile
     const onPointerUp = () => {
       if (lockedRef.current) { onRequireLogin?.(); return; }
       flipGravity();
@@ -1083,29 +1232,25 @@ function GameCanvas(
     } catch {}
   };
 
-  // Função para iniciar o jogo com o personagem selecionado
+  // iniciar o jogo com o personagem selecionado
   const startGame = (char?: Character) => {
-    if (char) {
-      setSelectedCharacter(char);
-    }
+    if (char) setSelectedCharacter(char);
     resetStateRefs();
     setShowCharSelect(false);
     setGameStarted(true);
   };
 
-  // Função para reiniciar (não volta à seleção, usa o personagem atual)
+  // reiniciar (não volta à seleção, usa o personagem atual)
   const restartGame = () => {
     resetStateRefs();
-    setGameStarted(true); // Mantém iniciado
-    setShowCharSelect(false); // Não mostra seleção
+    setGameStarted(true);
+    setShowCharSelect(false);
     onRestartRequest?.();
   };
 
-  // Abrir seleção de personagem (só antes de iniciar ou após game over)
+  // abrir seleção de personagem (só antes de iniciar ou após game over)
   const openCharSelect = () => {
-    if (!gameStarted || gameOver) {
-      setShowCharSelect(true);
-    }
+    if (!gameStarted || gameOver) setShowCharSelect(true);
   };
 
   // expõe openCharSelect para o pai
