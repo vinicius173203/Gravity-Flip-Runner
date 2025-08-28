@@ -7,9 +7,20 @@
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100;
+  @apply bg-zinc-950 text-zinc-100 font-sans; /* Added font-sans for better typography */
   font-synthesis-weight: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Added subtle twinkling stars for space theme */
+.stars {
+  background: transparent url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogIDxkZWZzPgogICAgPHBhdHRlcm4gaWQ9InN0YXJzIiB3aWR0aD0iNTAiIGhlaWdodD0iNTAiIHBhdHRlcm5Vbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8Y2lyY2xlIGN4PSIyNSIgY3k9IjI1IiByPSIxIiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC4xIiAvPgogICAgICA8Y2lyY2xlIGN4PSIxMCIgY3k9IjEwIiByPSIwLjUiIGZpbGw9IndoaXRlIiBvcGFjaXR5PSIwLjEiIC8+CiAgICAgIDxjaXJjbGUgY3g9IjQwIiBjeT0iNDAiIHI9IjAuOCIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuMSIgdHJhbnNmb3JtPSJyb3RhdGUoNDUpIiAvPgogICAgPC9wYXR0ZXJuPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI3N0YXJzKSIgLz4KPC9zdmc+') repeat;
+  animation: twinkle 5s infinite alternate;
+}
+
+@keyframes twinkle {
+  0% { opacity: 0.8; }
+  100% { opacity: 1; }
 }
