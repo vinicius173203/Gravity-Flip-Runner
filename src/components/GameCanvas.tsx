@@ -341,6 +341,26 @@ function GameCanvas(
     setShowCharSelect(false);
     setGameStarted(true);
   }, []);
+  // ⬇️ depois dos outros useState/useEffect
+const [isShortLandscape, setIsShortLandscape] = useState(false);
+
+useEffect(() => {
+  const check = () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const landscape = w > h;
+    setIsShortLandscape(landscape && h <= 480); // ajuste o 480 se quiser
+  };
+  check();
+  const mq = window.matchMedia('(orientation: landscape)');
+  mq.addEventListener?.('change', check);
+  window.addEventListener('resize', check);
+  return () => {
+    mq.removeEventListener?.('change', check);
+    window.removeEventListener('resize', check);
+  };
+}, []);
+
 
   // Salvar high score quando mudar
   useEffect(() => {
@@ -1266,66 +1286,119 @@ function GameCanvas(
     >
       {/* Tela de seleção de personagem */}
       {showCharSelect && (
-        <div className="absolute inset-0 z-10 bg-black/80 backdrop-blur-md rounded-2xl">
-          <div className="absolute inset-0 flex items-center justify-center p-3">
-            <div className="w-full max-w-[560px] rounded-2xl border border-white/10 bg-zinc-900/70 shadow-2xl">
-              <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/80 backdrop-blur">
-                <h2 className="text-white text-lg font-semibold">Select character</h2>
-                <button
-                  onClick={() => setShowCharSelect(false)}
-                  className="rounded-xl px-3 py-1.5 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
-                >
-                  ✕
-                </button>
-              </div>
+  <div className="absolute inset-0 z-10 bg-black/80 backdrop-blur-md rounded-2xl">
+    <div className="absolute inset-0 flex items-center justify-center p-2">
+      <div
+        className={[
+          "w-full border border-white/10 bg-zinc-900/70 shadow-2xl rounded-2xl",
+          // em landscape baixo: usar tela cheia (sem max-w) pra ganhar espaço
+          isShortLandscape ? "max-w-none h-[100svh] rounded-none" : "max-w-[560px]"
+        ].join(" ")}
+      >
+        {/* Header compacto */}
+          <div
+            className={[
+              "sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-zinc-900/80 backdrop-blur",
+              isShortLandscape ? "px-3 py-2" : "px-4 py-3"
+            ].join(" ")}
+          >
+            <h2 className={["text-white font-semibold", isShortLandscape ? "text-base" : "text-lg"].join(" ")}>
+              Select character
+            </h2>
+            <button
+              onClick={() => setShowCharSelect(false)}
+              className={[
+                "rounded-xl text-white border border-white/10 bg-white/10 hover:bg-white/20",
+                isShortLandscape ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm"
+              ].join(" ")}
+            >
+              ✕
+            </button>
+          </div>
 
-              <div className="px-3 pt-3 pb-2 max-h-[calc(100svh-220px)] overflow-y-auto">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-                  {CHARACTERS.map((char) => {
-                    const isSel = selectedCharacter?.src === char.src;
-                    return (
-                      <button
-                        key={char.src}
-                        onClick={() => setSelectedCharacter(char)}
-                        className={`flex items-center gap-3 w-full p-3 rounded-xl border transition
-                          ${isSel
-                            ? "bg-white/20 border-white/40"
-                            : "bg-white/10 border-white/15 hover:bg-white/15"}`}
-                      >
-                        <img
-                          src={char.src}
-                          alt={char.name}
-                          className="h-14 w-14 rounded-lg object-contain ring-1 ring-white/10 bg-black/20"
-                        />
-                        <div className="flex-1 text-left">
-                          <div className="text-white text-base font-medium">{char.name}</div>
-                          {isSel && <div className="text-emerald-300 text-xs">Selecionado</div>}
+          {/* Corpo: ocupa a altura útil, com scroll */}
+          <div
+            className={[
+              "overflow-y-auto",
+              // em portrait/normal, usa padding padrão; em landscape baixo, tudo mais compacto
+              isShortLandscape ? "px-2 pt-2 pb-2 max-h-[calc(100svh-92px)]" : "px-3 pt-3 pb-2 max-h-[calc(100svh-220px)]"
+            ].join(" ")}
+          >
+            <div
+              className={[
+                "grid gap-2",
+                // em landscape baixo, mais colunas e cartões menores
+                isShortLandscape ? "grid-cols-4" : "grid-cols-1 sm:grid-cols-2 md:grid-cols-3"
+              ].join(" ")}
+            >
+              {CHARACTERS.map((char) => {
+                const isSel = selectedCharacter?.src === char.src;
+                return (
+                  <button
+                    key={char.src}
+                    onClick={() => setSelectedCharacter(char)}
+                    className={[
+                      "flex items-center w-full rounded-xl border transition",
+                      isSel ? "bg-white/20 border-white/40" : "bg-white/10 border-white/15 hover:bg-white/15",
+                      // compacto: menos padding e gap
+                      isShortLandscape ? "p-2 gap-2" : "p-3 gap-3"
+                    ].join(" ")}
+                  >
+                    <img
+                      src={char.src}
+                      alt={char.name}
+                      className={[
+                        "rounded-lg object-contain ring-1 ring-white/10 bg-black/20",
+                        isShortLandscape ? "h-10 w-10" : "h-14 w-14"
+                      ].join(" ")}
+                    />
+                    <div className="flex-1 text-left">
+                      <div className={["text-white font-medium", isShortLandscape ? "text-sm" : "text-base"].join(" ")}>
+                        {char.name}
+                      </div>
+                      {isSel && (
+                        <div className={["text-emerald-300", isShortLandscape ? "text-[10px]" : "text-xs"].join(" ")}>
+                          Selecionado
                         </div>
-                        {isSel && <span className="text-emerald-300 text-lg">✓</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 px-4 py-3 border-t border-white/10 bg-zinc-900/80 backdrop-blur">
-                <button
-                  onClick={() => setShowCharSelect(false)}
-                  className="rounded-xl px-4 py-2 bg-white/10 text-white text-sm hover:bg-white/20 border border-white/10"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => startGame()}
-                  className="rounded-xl px-4 py-2 bg-emerald-600 text-white text-sm hover:opacity-90"
-                >
-                  Play
-                </button>
-              </div>
+                      )}
+                    </div>
+                    {isSel && <span className={isShortLandscape ? "text-emerald-300 text-base" : "text-emerald-300 text-lg"}>✓</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
+
+          {/* Rodapé compacto */}
+          <div
+            className={[
+              "sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t border-white/10 bg-zinc-900/80 backdrop-blur",
+              isShortLandscape ? "px-3 py-2" : "px-4 py-3"
+            ].join(" ")}
+          >
+            <button
+              onClick={() => setShowCharSelect(false)}
+              className={[
+                "rounded-xl bg-white/10 text-white border border-white/10 hover:bg-white/20",
+                isShortLandscape ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
+              ].join(" ")}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => startGame()}
+              className={[
+                "rounded-xl bg-emerald-600 text-white hover:opacity-90",
+                isShortLandscape ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
+              ].join(" ")}
+            >
+              Play
+            </button>
+          </div>
         </div>
-      )}
+      </div>
+    </div>
+  )}
 
       {/* Canvas */}
       {selectedCharacter && (

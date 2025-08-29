@@ -4,7 +4,7 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useMonadGamesWallet } from "@/hooks/useMonadGamesWallet";
 import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
 import GlobalLeaderboard from "@/components/GlobalLeaderboard";
-import { FaDiscord, FaTwitter, FaInstagram, FaRegCopy, FaCheck } from "react-icons/fa6";
+import { FaDiscord, FaTwitter, FaGithub, FaRegCopy, FaCheck } from "react-icons/fa6";
 
 const REG_URL = "https://monad-games-id-site.vercel.app/";
 
@@ -547,17 +547,17 @@ export default function Home() {
           </p>
           <div className="flex items-center gap-4">
             <a
-              href="https://instagram.com/SEU_INSTAGRAM"
+              href="https://github.com/vinicius173203"
               target="_blank"
               rel="noopener noreferrer"
               className="group inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
-              aria-label="Instagram"
-              title="Instagram"
+              aria-label="GitHub"
+              title="GitHub"
             >
-              <FaInstagram className="h-5 w-5 text-white/80 group-hover:text-white" />
+              <FaGithub className="h-5 w-5 text-white/80 group-hover:text-white" />
             </a>
             <a
-              href="https://discord.gg/SEU_DISCORD"
+              href="https://discord.com/channels/905936657075810316"
               target="_blank"
               rel="noopener noreferrer"
               className="group inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
@@ -567,7 +567,7 @@ export default function Home() {
               <FaDiscord className="h-5 w-5 text-white/80 group-hover:text-white" />
             </a>
             <a
-              href="https://twitter.com/SEU_TWITTER"
+              href="https://x.com/viniciusmedian"
               target="_blank"
               rel="noopener noreferrer"
               className="group inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
